@@ -3,15 +3,19 @@ V1 API Routes - Version-specific endpoints using shared controllers
 """
 from fastapi import APIRouter
 
-# Import routers (will be created in future tasks)
-# from app.api.v1 import auth, users, pets, appointments, clinics, chat, ecommerce, social, emergency
+# Import routers
+from app.api.v1 import users, pets
+# Future imports (will be created in future tasks)
+# from app.api.v1 import auth, appointments, clinics, chat, ecommerce, social, emergency
 
 api_router = APIRouter()
 
+# Include routers
+api_router.include_router(users.router, prefix="/users", tags=["users"])
+api_router.include_router(pets.router, prefix="/pets", tags=["pets"])
+
 # Include routers (will be uncommented as they are created)
 # api_router.include_router(auth.router, prefix="/auth", tags=["authentication"])
-# api_router.include_router(users.router, prefix="/users", tags=["users"])
-# api_router.include_router(pets.router, prefix="/pets", tags=["pets"])
 # api_router.include_router(appointments.router, prefix="/appointments", tags=["appointments"])
 # api_router.include_router(clinics.router, prefix="/clinics", tags=["clinics"])
 # api_router.include_router(chat.router, prefix="/chat", tags=["chat"])
