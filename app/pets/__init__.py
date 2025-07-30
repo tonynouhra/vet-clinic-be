@@ -1,0 +1,1 @@
+# Pets package - Version-agnostic business logic

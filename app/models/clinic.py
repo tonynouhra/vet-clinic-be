@@ -220,11 +220,8 @@ class Veterinarian(Base):
     # Relationships
     user = relationship("User", back_populates="veterinarian_profile", lazy="selectin")
     clinic = relationship("Clinic", back_populates="veterinarians", lazy="selectin")
-    specialties = relationship(
-        "VeterinarianSpecialty",
-        secondary=veterinarian_specialties,
-        lazy="selectin"
-    )
+    # Note: specialties relationship is handled through the veterinarian_specialties association table
+    # The specialties are accessed via the veterinarian_specialties table directly
     appointments = relationship("Appointment", back_populates="veterinarian", lazy="selectin")
     availability = relationship("VeterinarianAvailability", back_populates="veterinarian", lazy="selectin", cascade="all, delete-orphan")
     reviews = relationship("VeterinarianReview", back_populates="veterinarian", lazy="selectin", cascade="all, delete-orphan")

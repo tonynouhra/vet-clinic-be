@@ -1,0 +1,1 @@
+# V1 API Schemas - Version-specific request/response models

@@ -1,5 +1,5 @@
 """
-API v1 router configuration.
+V1 API Routes - Version-specific endpoints using shared controllers
 """
 from fastapi import APIRouter
 

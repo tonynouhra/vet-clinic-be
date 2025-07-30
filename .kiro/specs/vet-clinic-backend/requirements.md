@@ -182,7 +182,26 @@ The Veterinary Clinic Backend (vet-clinic-be) is the unified server-side compone
 3. WHEN security headers are needed THEN the system SHALL apply appropriate CORS and security configurations
 4. WHEN audit logging is required THEN the system SHALL log sensitive operations with proper correlation IDs
 
-### Requirement 17: Monitoring and Health Check API
+### Requirement 17: API Architecture Restructure with Version-Agnostic Business Logic
+
+**User Story:** As a backend system, I want to implement a clean layered architecture with proper separation of concerns and API versioning support, so that the codebase is maintainable, testable, follows best practices, and can evolve with multiple API versions.
+
+#### Acceptance Criteria
+
+1. WHEN organizing API resources THEN the system SHALL create separate packages for each resource (users, pets, appointments, etc.) that are version-agnostic with controller.py and services.py files
+2. WHEN structuring each resource package THEN schemas SHALL be moved to version-specific locations (api/schemas/v1/, api/schemas/v2/)
+3. WHEN implementing API versioning THEN each version SHALL have its own routing definitions and request/response schemas
+4. WHEN implementing API versioning THEN all versions SHALL use the same controllers and services for business logic
+5. WHEN processing HTTP requests THEN controllers SHALL accept parameters from any API version and orchestrate business operations
+6. WHEN accessing data THEN services SHALL handle all database operations and contain core business logic shared across versions
+7. WHEN defining API endpoints THEN they SHALL be organized by version with thin wrappers that delegate to shared controllers
+8. WHEN organizing common functionality THEN the system SHALL maintain app_helpers package for shared utilities across all versions
+9. WHEN injecting dependencies THEN controllers SHALL receive services via dependency injection and work with any API version
+10. WHEN organizing tests THEN the system SHALL create app_tests/ directory with unit/, functional/, and integration/ subdirectories including version compatibility tests
+11. WHEN errors occur THEN the system SHALL handle them consistently across all layers and API versions with proper propagation
+12. WHEN migrating existing code THEN the system SHALL preserve existing functionality as v1 and prepare architecture for future versions
+
+### Requirement 18: Monitoring and Health Check API
 
 **User Story:** As a backend system, I want to provide monitoring and health check endpoints, so that system health can be monitored and issues can be detected proactively.
 

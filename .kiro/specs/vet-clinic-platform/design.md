@@ -6,14 +6,14 @@ The Veterinary Clinic Platform is designed as a comprehensive web and mobile app
 
 ## Architecture
 
-### Simplified Two-Repository Structure
+### Simplified Two-Repository Structure with Clean Backend Architecture
 
 The platform follows a streamlined architecture with two main repositories:
 
-1. **vet-clinic-be**: Unified backend repository containing all server-side functionality
+1. **vet-clinic-be**: Unified backend repository with clean layered architecture and API versioning support
 2. **vet-clinic-fe**: Frontend repository with web and mobile applications
 
-This approach provides easier development, deployment, and maintenance while keeping the codebase organized and scalable.
+The backend implements the clean architecture pattern from api-architecture-restructure with version-agnostic business logic, ensuring maintainability, testability, and seamless API evolution. This approach provides easier development, deployment, and maintenance while keeping the codebase organized and scalable.
 
 ### Technology Stack
 
@@ -44,7 +44,7 @@ This approach provides easier development, deployment, and maintenance while kee
 
 ## Components and Interfaces
 
-### Backend Repository Structure (vet-clinic-be)
+### Backend Repository Structure (vet-clinic-be) - Clean Architecture with API Versioning
 
 ```
 vet-clinic-be/
@@ -62,27 +62,56 @@ vet-clinic-be/
 │   │   ├── communication.py # Chat and messaging models
 │   │   ├── ecommerce.py    # Product and order models
 │   │   └── social.py       # Social feed and interaction models
-│   ├── schemas/             # Pydantic schemas for API validation
-│   │   ├── user_schemas.py
-│   │   ├── pet_schemas.py
-│   │   ├── appointment_schemas.py
-│   │   └── [other schema files]
-│   ├── api/                 # API route handlers
+│   ├── api/                 # API route handlers with versioning
+│   │   ├── deps.py         # API dependencies and middleware
+│   │   ├── schemas/        # Version-specific schemas
+│   │   │   ├── v1/         # V1 request/response models
+│   │   │   │   ├── users.py    # V1 user schemas
+│   │   │   │   ├── pets.py     # V1 pet schemas
+│   │   │   │   ├── appointments.py # V1 appointment schemas
+│   │   │   │   ├── clinics.py  # V1 clinic schemas
+│   │   │   │   ├── chat.py     # V1 chat schemas
+│   │   │   │   ├── ecommerce.py # V1 e-commerce schemas
+│   │   │   │   └── social.py   # V1 social schemas
+│   │   │   └── v2/         # V2 enhanced schemas (future)
+│   │   │       ├── users.py    # V2 enhanced user schemas
+│   │   │       ├── pets.py     # V2 enhanced pet schemas
+│   │   │       └── [other v2 schemas]
 │   │   ├── v1/             # API version 1 routes
-│   │   │   ├── auth.py     # Authentication endpoints
-│   │   │   ├── users.py    # User management endpoints
-│   │   │   ├── pets.py     # Pet management endpoints
-│   │   │   ├── appointments.py # Appointment scheduling endpoints
-│   │   │   ├── clinics.py  # Clinic and veterinarian endpoints
-│   │   │   ├── chat.py     # Communication endpoints
-│   │   │   ├── ecommerce.py # E-commerce endpoints
-│   │   │   ├── social.py   # Social feed endpoints
-│   │   │   └── emergency.py # Emergency services endpoints
-│   │   └── deps.py         # API dependencies and middleware
-│   ├── services/            # Business logic services
-│   │   ├── auth_service.py  # Authentication business logic
+│   │   │   ├── users.py    # V1 user endpoints → shared controllers
+│   │   │   ├── pets.py     # V1 pet endpoints → shared controllers
+│   │   │   ├── appointments.py # V1 appointment endpoints → shared controllers
+│   │   │   ├── clinics.py  # V1 clinic endpoints → shared controllers
+│   │   │   ├── chat.py     # V1 chat endpoints → shared controllers
+│   │   │   ├── ecommerce.py # V1 e-commerce endpoints → shared controllers
+│   │   │   ├── social.py   # V1 social endpoints → shared controllers
+│   │   │   └── emergency.py # V1 emergency endpoints → shared controllers
+│   │   └── v2/             # API version 2 routes (future)
+│   │       ├── users.py    # V2 user endpoints → same shared controllers
+│   │       ├── pets.py     # V2 pet endpoints → same shared controllers
+│   │       └── [other v2 endpoints]
+│   ├── users/               # Version-agnostic User resource package
+│   │   ├── controller.py   # Shared across ALL API versions
+│   │   └── services.py     # Shared across ALL API versions
+│   ├── pets/                # Version-agnostic Pet resource package
+│   │   ├── controller.py   # Shared across ALL API versions
+│   │   └── services.py     # Shared across ALL API versions
+│   ├── appointments/        # Version-agnostic Appointment resource package
+│   │   ├── controller.py   # Shared across ALL API versions
+│   │   └── services.py     # Shared across ALL API versions
+│   ├── clinics/             # Version-agnostic Clinic resource package
+│   │   ├── controller.py   # Shared across ALL API versions
+│   │   └── services.py     # Shared across ALL API versions
+│   ├── chat/                # Version-agnostic Communication resource package
+│   │   ├── controller.py   # Shared across ALL API versions
+│   │   └── services.py     # Shared across ALL API versions
+│   ├── app_helpers/         # Common functionality and utilities
+│   │   ├── auth_helpers.py # Authentication utilities
+│   │   ├── response_helpers.py # Response formatting utilities
+│   │   ├── validation_helpers.py # Common validation utilities
+│   │   └── dependency_helpers.py # Dependency injection utilities
+│   ├── services/            # Legacy business logic services (to be migrated)
 │   │   ├── notification_service.py # Email/SMS notifications
-│   │   ├── appointment_service.py # Appointment management logic
 │   │   ├── payment_service.py # Payment processing
 │   │   ├── location_service.py # Location-based services
 │   │   └── ai_service.py   # AI chatbot integration
@@ -94,7 +123,23 @@ vet-clinic-be/
 │       ├── email.py        # Email utilities
 │       ├── file_storage.py # File upload/download utilities
 │       └── validators.py   # Custom validation functions
-├── tests/                  # Test suite
+├── app_tests/              # Test suite (aligned with api-architecture-restructure)
+│   ├── unit/               # Unit tests for individual functions
+│   │   ├── test_controllers/ # Controller unit tests
+│   │   ├── test_services/  # Service unit tests
+│   │   ├── test_models/    # Database model tests
+│   │   └── test_schemas/   # Pydantic schema tests
+│   ├── functional/         # Functional tests for complete workflows
+│   │   ├── test_user_workflows/
+│   │   ├── test_pet_workflows/
+│   │   └── test_appointment_workflows/
+│   ├── integration/        # Integration tests for full API flows
+│   │   ├── test_v1_endpoints/ # V1 API integration tests
+│   │   ├── test_v2_endpoints/ # V2 API integration tests (future)
+│   │   ├── test_version_compatibility/ # Cross-version compatibility tests
+│   │   ├── test_database/  # Database integration tests
+│   │   └── test_tasks/     # Background task tests
+│   └── fixtures/           # Test data and fixtures
 ├── alembic/               # Database migrations
 ├── docker-compose.yml     # Local development environment
 ├── Dockerfile            # Container configuration

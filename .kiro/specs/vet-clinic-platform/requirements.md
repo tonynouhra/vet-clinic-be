@@ -1,8 +1,8 @@
-# Requirements Document
+# Veterinary Clinic Platform Requirements
 
 ## Introduction
 
-The Veterinary Clinic Platform is a comprehensive web and mobile application designed to streamline pet health management, enhance communication between veterinarians and pet owners, and provide additional services for the veterinary ecosystem. The platform serves three primary user groups: pet owners, veterinarians, and clinic administrators, offering features ranging from appointment scheduling and health record management to e-commerce and emergency services.
+The Veterinary Clinic Platform is a comprehensive web and mobile application designed to streamline pet health management, enhance communication between veterinarians and pet owners, and provide additional services for the veterinary ecosystem. The platform serves three primary user groups: pet owners, veterinarians, and clinic administrators, offering features ranging from appointment scheduling and health record management to e-commerce and emergency services. The backend follows the clean architecture pattern defined in the api-architecture-restructure specification with version-agnostic business logic and proper API versioning support.
 
 ## Requirements
 

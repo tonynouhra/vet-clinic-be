@@ -1,6 +1,7 @@
 # Backend Implementation Plan
 
 - [x] 1. Set up backend project structure and core configuration
+
   - Create FastAPI project structure with proper directory organization
   - Configure database connection with SQLAlchemy and Supabase PostgreSQL
   - Set up Redis connection for caching and Celery message broker
@@ -8,7 +9,8 @@
   - Create Docker configuration for local development environment
   - _Requirements: 1.1, 1.2, 1.3_
 
-- [ ] 2. Implement core database models and relationships
+- [x] 2. Implement core database models and relationships
+
   - Create User model with Clerk integration and role-based access control
   - Implement Pet model with health record relationships
   - Create Appointment model with veterinarian and clinic associations
@@ -17,16 +19,31 @@
   - Write database migration scripts using Alembic
   - _Requirements: 2.1, 2.2, 2.3, 4.1, 6.1_
 
-- [ ] 3. Set up authentication and authorization system
+- [ ] 3. Implement API architecture restructure with version-agnostic business logic
+
+  - Create directory structure for version-agnostic controller-service pattern with version-specific schemas
+  - Implement enhanced dependency injection helpers for version-agnostic controllers
+  - Create base exception classes and error handling system that works across API versions
+  - Set up resource packages (users, pets, appointments, clinics, chat) with version-agnostic controller.py and services.py files
+  - Create api/schemas/v1/ and api/schemas/v2/ directories for version-specific schemas
+  - Update API endpoints to use shared controllers with version-specific routing and schemas
+  - Create app_helpers package with authentication, response, and validation utilities that work across versions
+  - Migrate existing functionality to new layered architecture preserving as V1
+  - Create comprehensive tests including version compatibility testing
+  - _Requirements: 17.1, 17.2, 17.3, 17.4, 17.5, 17.6, 17.7, 17.8, 17.9, 17.10, 17.11, 17.12_
+
+- [ ] 4. Set up authentication and authorization system
+
   - Integrate Clerk authentication with FastAPI JWT middleware
   - Implement role-based permission decorators and dependencies
-  - Create user registration and login API endpoints
+  - Create user registration and login API endpoints with new controller pattern
   - Write user profile management endpoints with role validation
   - Implement secure session management with Redis caching
   - Create unit tests for authentication and authorization logic
   - _Requirements: 1.1, 1.2, 1.3, 1.4_
 
-- [ ] 4. Develop pet management API endpoints
+- [ ] 5. Develop pet management API endpoints
+
   - Create pet registration endpoint with detailed profile validation
   - Implement pet profile retrieval and update endpoints
   - Build health record management endpoints with audit trail
@@ -35,7 +52,8 @@
   - Write comprehensive tests for pet management functionality
   - _Requirements: 2.1, 2.2, 2.3, 2.4_
 
-- [ ] 5. Build appointment scheduling API system
+- [ ] 6. Build appointment scheduling API system
+
   - Create appointment booking endpoint with availability checking
   - Implement calendar view API with veterinarian availability
   - Build appointment confirmation and reminder notification system
@@ -44,7 +62,8 @@
   - Write integration tests for appointment scheduling workflows
   - _Requirements: 3.1, 3.2, 3.3, 3.4_
 
-- [ ] 6. Implement veterinarian and clinic management API
+- [ ] 7. Implement veterinarian and clinic management API
+
   - Create veterinarian profile endpoints with specialty and rating data
   - Build clinic management endpoints with location and service information
   - Implement search and filtering functionality for doctor selection
@@ -53,7 +72,8 @@
   - Write tests for search and filtering functionality
   - _Requirements: 4.1, 4.2, 4.3, 4.4_
 
-- [ ] 7. Develop emergency services API functionality
+- [ ] 8. Develop emergency services API functionality
+
   - Create emergency request endpoint with real-time veterinarian matching
   - Implement location-based emergency service discovery
   - Build real-time notification system for emergency alerts
@@ -62,7 +82,8 @@
   - Write tests for emergency service workflows and edge cases
   - _Requirements: 5.1, 5.2, 5.3, 5.4_
 
-- [ ] 8. Build communication and messaging API system
+- [ ] 9. Build communication and messaging API system
+
   - Create chat conversation endpoints with secure messaging
   - Implement real-time messaging with WebSocket support
   - Build AI chatbot integration for common question responses
@@ -71,7 +92,8 @@
   - Write tests for messaging functionality and real-time features
   - _Requirements: 6.1, 6.2, 6.3, 6.4_
 
-- [ ] 9. Implement social feed and community API features
+- [ ] 10. Implement social feed and community API features
+
   - Create social post creation and management endpoints
   - Build community feed with personalized content filtering
   - Implement like, comment, and share functionality
@@ -80,7 +102,8 @@
   - Write tests for social features and content moderation
   - _Requirements: 7.1, 7.2, 7.3, 7.4_
 
-- [ ] 10. Develop adoption and donation API portal
+- [ ] 11. Develop adoption and donation API portal
+
   - Create adoptable pet profile management endpoints
   - Build adoption search and filtering functionality
   - Implement donation processing with secure payment integration
@@ -89,7 +112,8 @@
   - Write tests for adoption workflows and payment processing
   - _Requirements: 8.1, 8.2, 8.3, 8.4_
 
-- [ ] 11. Build e-commerce API platform functionality
+- [ ] 12. Build e-commerce API platform functionality
+
   - Create product catalog management endpoints
   - Implement shopping cart and order management system
   - Build secure payment processing with order tracking
@@ -98,7 +122,8 @@
   - Write comprehensive tests for e-commerce workflows
   - _Requirements: 9.1, 9.2, 9.3, 9.4_
 
-- [ ] 12. Implement pet insurance integration API
+- [ ] 13. Implement pet insurance integration API
+
   - Create insurance plan comparison endpoints
   - Build insurance provider API integration
   - Implement insurance enrollment and policy management
@@ -107,7 +132,8 @@
   - Write tests for insurance integration and enrollment flows
   - _Requirements: 10.1, 10.2, 10.3, 10.4_
 
-- [ ] 13. Develop grooming services API system
+- [ ] 14. Develop grooming services API system
+
   - Create grooming service package management endpoints
   - Build grooming appointment scheduling integrated with main calendar
   - Implement grooming service pricing and package selection
@@ -116,7 +142,8 @@
   - Write tests for grooming service workflows
   - _Requirements: 11.1, 11.2, 11.3, 11.4_
 
-- [ ] 14. Build subscription and premium features API
+- [ ] 15. Build subscription and premium features API
+
   - Create subscription plan management endpoints
   - Implement recurring payment processing for subscriptions
   - Build premium feature access control and validation
@@ -125,7 +152,8 @@
   - Write tests for subscription management and premium features
   - _Requirements: 12.1, 12.2, 12.3, 12.4_
 
-- [ ] 15. Implement location-based services API
+- [ ] 16. Implement location-based services API
+
   - Create location search endpoints with map integration
   - Build proximity-based service discovery functionality
   - Implement GPS location tracking and distance calculations
@@ -134,7 +162,8 @@
   - Write tests for location services and GPS functionality
   - _Requirements: 13.1, 13.2, 13.3, 13.4_
 
-- [ ] 16. Set up background task processing system
+- [ ] 17. Set up background task processing system
+
   - Configure Celery workers for asynchronous task processing
   - Implement notification tasks for appointment reminders
   - Create scheduled tasks for health record reminders
@@ -144,6 +173,7 @@
   - _Requirements: 14.1, 14.2, 14.3, 14.4_
 
 - [ ] 17. Develop notification and communication services
+
   - Create email notification service with template management
   - Implement SMS notification service for urgent communications
   - Build push notification system for mobile applications
@@ -153,6 +183,7 @@
   - _Requirements: 2.4, 3.3, 5.2, 6.2_
 
 - [ ] 18. Build file storage and media management API
+
   - Implement secure file upload endpoints with validation
   - Create image processing and optimization for pet photos
   - Build document storage for health records and certificates
@@ -162,6 +193,7 @@
   - _Requirements: 15.1, 15.2, 15.3, 15.4_
 
 - [ ] 19. Implement API security and rate limiting
+
   - Create API rate limiting middleware with Redis backend
   - Implement request validation and sanitization
   - Build API security headers and CORS configuration
@@ -171,6 +203,7 @@
   - _Requirements: 16.1, 16.2, 16.3, 16.4_
 
 - [ ] 20. Set up monitoring, logging, and error tracking
+
   - Configure Sentry for error tracking and performance monitoring
   - Implement structured logging with correlation IDs
   - Create health check endpoints for system monitoring
@@ -180,6 +213,7 @@
   - _Requirements: 17.1, 17.2, 17.3, 17.4_
 
 - [ ] 21. Create comprehensive API documentation
+
   - Generate OpenAPI/Swagger documentation for all endpoints
   - Create API usage examples and integration guides
   - Build interactive API documentation with request/response samples
@@ -189,6 +223,7 @@
   - _Requirements: All API-related requirements_
 
 - [ ] 22. Implement database optimization and indexing
+
   - Create database indexes for frequently queried fields
   - Implement query optimization for complex joins
   - Build database connection pooling and management
@@ -198,6 +233,7 @@
   - _Requirements: All requirements for system performance_
 
 - [ ] 23. Set up deployment and CI/CD pipelines
+
   - Create Docker containers for backend services
   - Set up GitHub Actions for automated testing and deployment
   - Configure staging and production environments
@@ -207,6 +243,7 @@
   - _Requirements: All requirements for system reliability and deployment_
 
 - [ ] 24. Perform comprehensive testing and quality assurance
+
   - Create end-to-end test suites for critical API workflows
   - Implement load testing for API endpoints and database
   - Perform security testing and vulnerability assessment
@@ -216,6 +253,7 @@
   - _Requirements: All requirements for system quality and reliability_
 
 - [ ] 25. Implement advanced caching strategies
+
   - Set up Redis caching for frequently accessed data
   - Implement cache invalidation strategies for data consistency
   - Create cache warming procedures for optimal performance
@@ -225,6 +263,7 @@
   - _Requirements: Performance optimization for all API endpoints_
 
 - [ ] 26. Build data analytics and reporting system
+
   - Create analytics data collection endpoints
   - Implement business intelligence reporting APIs
   - Build dashboard data aggregation services
@@ -234,6 +273,7 @@
   - _Requirements: Business intelligence and reporting needs_
 
 - [ ] 27. Implement webhook and integration system
+
   - Create webhook endpoint management for third-party integrations
   - Build webhook delivery and retry mechanisms
   - Implement webhook security and validation

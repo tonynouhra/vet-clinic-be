@@ -8,19 +8,56 @@ The Veterinary Clinic Backend (vet-clinic-be) is designed as a unified, high-per
 
 ### System Architecture
 
-The backend follows a layered architecture pattern:
+The backend follows a clean layered architecture pattern with proper separation of concerns:
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                    API Layer (FastAPI)                     │
+│              Thin routing and dependency injection         │
+├─────────────────────────────────────────────────────────────┤
+│                   Controller Layer                         │
+│           HTTP handling and business logic orchestration   │
 ├─────────────────────────────────────────────────────────────┤
 │                   Service Layer                            │
-├─────────────────────────────────────────────────────────────┤
-│                   Data Access Layer                        │
+│              Data access and core business logic           │
 ├─────────────────────────────────────────────────────────────┤
 │                   Database Layer                           │
+│                SQLAlchemy models and queries               │
 └─────────────────────────────────────────────────────────────┘
 ```
+
+### Layered Architecture Pattern with API Versioning
+
+#### API Layer (api/v1/, api/v2/) - VERSION SPECIFIC
+- **Purpose**: Version-specific route definition and HTTP method handling
+- **Responsibilities**:
+  - Define version-specific FastAPI routes and HTTP methods
+  - Handle dependency injection (database sessions, authentication)
+  - Use version-specific schemas for request/response validation
+  - Delegate immediately to shared, version-agnostic controllers
+  - Maintain RESTful URL patterns within each version
+
+#### Controller Layer (resource packages/) - VERSION AGNOSTIC
+- **Purpose**: HTTP request processing and business logic orchestration shared across all API versions
+- **Responsibilities**:
+  - Handle HTTP request/response processing for any API version
+  - Accept parameters from any API version gracefully
+  - Implement business logic workflows
+  - Coordinate multiple service calls
+  - Handle authentication and authorization
+  - Format responses using response helpers
+  - Apply business rules and validation
+  - Manage transaction boundaries
+
+#### Service Layer (services.py in each resource/) - VERSION AGNOSTIC
+- **Purpose**: Data access and core business logic shared across all API versions
+- **Responsibilities**:
+  - Handle database operations
+  - Implement core business logic
+  - Manage entity lifecycle
+  - Handle external API integrations
+  - Provide data transformation
+  - Execute database queries and transactions
 
 ### Technology Stack
 
@@ -54,86 +91,160 @@ The backend follows a layered architecture pattern:
 
 ```
 vet-clinic-be/
-├── app/
+├── app/                          # Main application package
 │   ├── __init__.py
-│   ├── main.py                    # FastAPI application entry point
-│   ├── core/                      # Core utilities and configuration
+│   ├── main.py                   # FastAPI application entry point
+│   ├── core/                     # Core utilities and configuration
 │   │   ├── __init__.py
-│   │   ├── config.py             # Pydantic settings and environment config
-│   │   ├── database.py           # Database connection and session management
-│   │   ├── security.py           # Authentication and authorization utilities
-│   │   ├── exceptions.py         # Custom exception classes and handlers
-│   │   ├── celery_app.py         # Celery configuration and setup
-│   │   └── redis.py              # Redis connection and utilities
-│   ├── models/                    # SQLAlchemy database models
+│   │   ├── config.py            # Pydantic settings and environment config
+│   │   ├── database.py          # Database connection and session management
+│   │   ├── security.py          # Authentication and authorization utilities
+│   │   ├── exceptions.py        # Custom exception classes and handlers
+│   │   ├── celery_app.py        # Celery configuration and setup
+│   │   └── redis.py             # Redis connection and utilities
+│   ├── models/                   # SQLAlchemy database models
 │   │   ├── __init__.py
-│   │   ├── user.py               # User, roles, and authentication models
-│   │   ├── pet.py                # Pet profiles and health records
-│   │   ├── appointment.py        # Appointment scheduling models
-│   │   ├── clinic.py             # Clinic and veterinarian models
-│   │   ├── communication.py      # Chat and messaging models
-│   │   └── [other model files]
-│   ├── schemas/                   # Pydantic schemas for API validation
+│   │   ├── user.py              # User, roles, and authentication models
+│   │   ├── pet.py               # Pet profiles and health records
+│   │   ├── appointment.py       # Appointment scheduling models
+│   │   ├── clinic.py            # Clinic and veterinarian models
+│   │   └── communication.py     # Chat and messaging models
+│   ├── api/                      # API route handlers with versioning
 │   │   ├── __init__.py
-│   │   ├── user_schemas.py       # User-related request/response schemas
-│   │   ├── pet_schemas.py        # Pet-related schemas
-│   │   ├── appointment_schemas.py # Appointment schemas
-│   │   └── [other schema files]
-│   ├── api/                       # API route handlers
-│   │   ├── __init__.py
-│   │   ├── deps.py               # API dependencies and middleware
-│   │   └── v1/                   # API version 1 routes
+│   │   ├── deps.py              # API dependencies and middleware
+│   │   ├── schemas/             # Version-specific schemas
+│   │   │   ├── __init__.py
+│   │   │   ├── v1/              # V1 request/response models
+│   │   │   │   ├── __init__.py
+│   │   │   │   ├── users.py     # V1 user schemas
+│   │   │   │   ├── pets.py      # V1 pet schemas
+│   │   │   │   ├── appointments.py # V1 appointment schemas
+│   │   │   │   ├── clinics.py   # V1 clinic schemas
+│   │   │   │   └── chat.py      # V1 chat schemas
+│   │   │   └── v2/              # V2 request/response models (future)
+│   │   │       ├── __init__.py
+│   │   │       ├── users.py     # V2 enhanced user schemas
+│   │   │       ├── pets.py      # V2 enhanced pet schemas
+│   │   │       └── [other v2 schemas]
+│   │   ├── v1/                  # API version 1 routes
+│   │   │   ├── __init__.py
+│   │   │   ├── users.py         # V1 user endpoints → shared controllers
+│   │   │   ├── pets.py          # V1 pet endpoints → shared controllers
+│   │   │   ├── appointments.py  # V1 appointment endpoints → shared controllers
+│   │   │   ├── clinics.py       # V1 clinic endpoints → shared controllers
+│   │   │   ├── chat.py          # V1 chat endpoints → shared controllers
+│   │   │   └── emergency.py     # V1 emergency endpoints → shared controllers
+│   │   └── v2/                  # API version 2 routes (future)
 │   │       ├── __init__.py
-│   │       ├── auth.py           # Authentication endpoints
-│   │       ├── users.py          # User management endpoints
-│   │       ├── pets.py           # Pet management endpoints
-│   │       ├── appointments.py   # Appointment scheduling endpoints
-│   │       ├── clinics.py        # Clinic and veterinarian endpoints
-│   │       ├── chat.py           # Communication endpoints
-│   │       ├── emergency.py      # Emergency services endpoints
-│   │       └── [other route files]
-│   ├── services/                  # Business logic services
+│   │       ├── users.py         # V2 user endpoints → same shared controllers
+│   │       ├── pets.py          # V2 pet endpoints → same shared controllers
+│   │       └── [other v2 endpoints]
+│   ├── users/                    # Version-agnostic User resource package
 │   │   ├── __init__.py
-│   │   ├── auth_service.py       # Authentication business logic
+│   │   ├── controller.py        # Shared across ALL API versions
+│   │   └── services.py          # Shared across ALL API versions
+│   ├── pets/                     # Version-agnostic Pet resource package
+│   │   ├── __init__.py
+│   │   ├── controller.py        # Shared across ALL API versions
+│   │   └── services.py          # Shared across ALL API versions
+│   ├── appointments/             # Version-agnostic Appointment resource package
+│   │   ├── __init__.py
+│   │   ├── controller.py        # Shared across ALL API versions
+│   │   └── services.py          # Shared across ALL API versions
+│   ├── clinics/                  # Version-agnostic Clinic resource package
+│   │   ├── __init__.py
+│   │   ├── controller.py        # Shared across ALL API versions
+│   │   └── services.py          # Shared across ALL API versions
+│   ├── chat/                     # Version-agnostic Communication resource package
+│   │   ├── __init__.py
+│   │   ├── controller.py        # Shared across ALL API versions
+│   │   └── services.py          # Shared across ALL API versions
+│   ├── app_helpers/              # Common functionality and utilities
+│   │   ├── __init__.py
+│   │   ├── auth_helpers.py      # Authentication utilities
+│   │   ├── response_helpers.py  # Response formatting utilities
+│   │   ├── validation_helpers.py # Common validation utilities
+│   │   └── dependency_helpers.py # Dependency injection utilities
+│   ├── services/                 # Legacy business logic services (to be migrated)
+│   │   ├── __init__.py
 │   │   ├── notification_service.py # Email/SMS/Push notifications
-│   │   ├── appointment_service.py # Appointment management logic
-│   │   ├── payment_service.py    # Payment processing integration
-│   │   ├── location_service.py   # Location-based services
-│   │   ├── ai_service.py         # AI chatbot integration
+│   │   ├── payment_service.py   # Payment processing integration
+│   │   ├── location_service.py  # Location-based services
+│   │   ├── ai_service.py        # AI chatbot integration
 │   │   └── [other service files]
-│   ├── tasks/                     # Celery background tasks
+│   ├── tasks/                    # Celery background tasks
 │   │   ├── __init__.py
 │   │   ├── notification_tasks.py # Reminder and notification tasks
-│   │   ├── report_tasks.py       # Report generation tasks
-│   │   ├── maintenance_tasks.py  # System maintenance tasks
+│   │   ├── report_tasks.py      # Report generation tasks
+│   │   ├── maintenance_tasks.py # System maintenance tasks
 │   │   └── [other task files]
-│   └── utils/                     # Utility functions
+│   └── utils/                    # Utility functions
 │       ├── __init__.py
-│       ├── email.py              # Email utilities and templates
-│       ├── file_storage.py       # File upload/download utilities
-│       ├── validators.py         # Custom validation functions
+│       ├── email.py             # Email utilities and templates
+│       ├── file_storage.py      # File upload/download utilities
+│       ├── validators.py        # Custom validation functions
 │       └── [other utility files]
-├── tests/                         # Test suite
+├── app_tests/                    # Test suite (aligned with api-architecture-restructure)
 │   ├── __init__.py
-│   ├── conftest.py               # Pytest configuration and fixtures
-│   ├── unit/                     # Unit tests
-│   │   ├── test_models/
-│   │   ├── test_services/
-│   │   └── test_schemas/
-│   ├── integration/              # Integration tests
-│   │   ├── test_api/
-│   │   ├── test_database/
-│   │   └── test_tasks/
-│   └── fixtures/                 # Test data and fixtures
-├── alembic/                      # Database migrations
-│   ├── versions/
-│   ├── env.py
-│   └── script.py.mako
-├── docker-compose.yml            # Local development environment
-├── Dockerfile                    # Container configuration
-├── requirements.txt              # Python dependencies
-├── alembic.ini                   # Alembic configuration
-└── .env.example                  # Environment variables template
+│   ├── README.md                # Testing documentation
+│   ├── conftest.py              # Pytest configuration and fixtures
+│   ├── unit/                    # Unit tests for individual functions
+│   │   ├── __init__.py
+│   │   ├── test_controllers/    # Controller unit tests
+│   │   ├── test_services/       # Service unit tests
+│   │   ├── test_models/         # Database model tests
+│   │   │   ├── __init__.py
+│   │   │   └── test_all_models.py # Comprehensive model validation
+│   │   └── test_schemas/        # Pydantic schema tests
+│   ├── functional/              # Functional tests for complete workflows
+│   │   ├── __init__.py
+│   │   ├── test_user_workflows/
+│   │   ├── test_pet_workflows/
+│   │   └── test_appointment_workflows/
+│   ├── integration/             # Integration tests for full API flows
+│   │   ├── __init__.py
+│   │   ├── test_v1_endpoints/   # V1 API integration tests
+│   │   ├── test_v2_endpoints/   # V2 API integration tests (future)
+│   │   ├── test_version_compatibility/ # Cross-version compatibility tests
+│   │   ├── test_database/       # Database integration tests
+│   │   └── test_tasks/          # Background task tests
+│   └── fixtures/                # Test data and fixtures
+├── scripts/                     # Development and utility scripts
+│   ├── dev.sh                  # Development server script
+│   ├── start.sh                # Production start script
+│   └── verify_tasks/           # Task verification scripts
+│       ├── __init__.py
+│       ├── README.md           # Verification documentation
+│       └── verify_task_2.py    # Task 2 completion verification
+├── docs/                       # Project documentation
+│   ├── README.md              # Documentation overview
+│   ├── api/                   # API documentation
+│   │   ├── endpoints.md       # API endpoint documentation
+│   │   ├── authentication.md  # Authentication and authorization
+│   │   └── schemas.md         # Request/response schemas
+│   ├── development/           # Development guides
+│   │   ├── setup.md          # Development environment setup
+│   │   ├── testing.md        # Testing guidelines and practices
+│   │   ├── database.md       # Database setup and migrations
+│   │   └── contributing.md   # Contribution guidelines
+│   ├── deployment/           # Deployment documentation
+│   │   ├── docker.md         # Docker deployment guide
+│   │   ├── production.md     # Production deployment
+│   │   └── monitoring.md     # Monitoring and logging
+│   └── architecture/         # System architecture
+│       ├── overview.md       # System architecture overview
+│       ├── database.md       # Database design and schema
+│       └── services.md       # Service layer architecture
+├── alembic/                  # Database migrations
+│   ├── versions/             # Migration version files
+│   ├── env.py               # Alembic environment configuration
+│   └── script.py.mako       # Migration script template
+├── docker-compose.yml       # Local development environment
+├── Dockerfile               # Container configuration
+├── requirements.txt         # Python dependencies
+├── alembic.ini             # Alembic configuration
+├── test_setup.py           # Setup verification script
+└── .env.example            # Environment variables template
 ```
 
 ### API Design Patterns
