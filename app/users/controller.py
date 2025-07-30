@@ -16,6 +16,7 @@ from app.core.database import get_db
 from app.core.exceptions import VetClinicException, NotFoundError, ValidationError
 from app.models.user import User, UserRole
 from .services import UserService
+from ..app_helpers import validate_pagination_params
 
 
 class UserController:
@@ -56,11 +57,7 @@ class UserController:
         """
         try:
             # Validate pagination parameters
-            if page < 1:
-                raise ValidationError("Page must be greater than 0")
-            if per_page < 1 or per_page > 100:
-                raise ValidationError("Items per page must be between 1 and 100")
-            
+            page,page_size=validate_pagination_params(page=page, size=per_page)
             # Delegate to service
             users, total = await self.service.list_users(
                 page=page,
