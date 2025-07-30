@@ -2,7 +2,7 @@
 Common helper functions and utilities used across the application.
 """
 from .auth_helpers import get_current_user, verify_permissions, require_role
-from .validation_helpers import validate_uuid, validate_email, validate_phone
+from .validation_helpers import validate_uuid, validate_email, validate_phone, validate_pagination_params
 from .response_helpers import success_response, error_response, paginated_response
 from .pagination_helpers import get_pagination_params, create_pagination_meta
 from .error_helpers import handle_database_error, handle_validation_error
@@ -24,6 +24,7 @@ __all__ = [
     "validate_uuid",
     "validate_email",
     "validate_phone",
+    "validate_pagination_params",
     
     # Response helpers
     "success_response",
