@@ -49,9 +49,15 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
 
 async def init_db() -> None:
     """Initialize database tables."""
+    # Import all models here to ensure they are registered with Base
+    from app.models import (
+        User, UserSession, Pet, HealthRecord, Reminder,
+        Clinic, ClinicOperatingHours, Veterinarian, VeterinarianAvailability,
+        ClinicReview, VeterinarianReview, Appointment, AppointmentSlot,
+        Conversation, Message, MessageReaction, ChatBot, NotificationPreference
+    )
+    
     async with engine.begin() as conn:
-        # Import all models here to ensure they are registered with Base
-        # This will be expanded when we create the models
         await conn.run_sync(Base.metadata.create_all)
 
 
