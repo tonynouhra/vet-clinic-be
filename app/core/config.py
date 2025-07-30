@@ -37,8 +37,8 @@ class Settings(BaseSettings):
     REFRESH_TOKEN_EXPIRE_DAYS: int = Field(default=7, env="REFRESH_TOKEN_EXPIRE_DAYS")
     
     # CORS
-    BACKEND_CORS_ORIGINS: List[str] = Field(
-        default=["http://localhost:3000", "http://localhost:5173"],
+    BACKEND_CORS_ORIGINS: str = Field(
+        default="http://localhost:3000,http://localhost:5173",
         env="BACKEND_CORS_ORIGINS"
     )
     
@@ -58,14 +58,12 @@ class Settings(BaseSettings):
     SMTP_PASSWORD: Optional[str] = Field(default=None, env="SMTP_PASSWORD")
     SMTP_FROM_EMAIL: Optional[str] = Field(default=None, env="SMTP_FROM_EMAIL")
     
-    @validator("BACKEND_CORS_ORIGINS", pre=True)
-    def assemble_cors_origins(cls, v):
-        """Parse CORS origins from string or list."""
-        if isinstance(v, str) and not v.startswith("["):
-            return [i.strip() for i in v.split(",")]
-        elif isinstance(v, (list, str)):
-            return v
-        raise ValueError(v)
+    @property
+    def cors_origins(self) -> List[str]:
+        """Get CORS origins as a list."""
+        if isinstance(self.BACKEND_CORS_ORIGINS, str):
+            return [i.strip() for i in self.BACKEND_CORS_ORIGINS.split(",") if i.strip()]
+        return []
     
     class Config:
         env_file = ".env"

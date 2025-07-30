@@ -34,7 +34,7 @@ app = FastAPI(
 # Set up CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.BACKEND_CORS_ORIGINS,
+    allow_origins=settings.cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -52,9 +52,13 @@ async def root():
 
 @app.get("/health")
 async def health_check():
-    """Health check endpoint."""
-    return {
-        "status": "healthy",
-        "environment": settings.ENVIRONMENT,
-        "version": settings.VERSION
-    }
+    """Comprehensive health check endpoint."""
+    from app.services.system_service import system_service
+    return await system_service.get_health_status()
+
+
+@app.get("/info")
+async def system_info():
+    """System information endpoint."""
+    from app.services.system_service import system_service
+    return await system_service.get_system_info()
