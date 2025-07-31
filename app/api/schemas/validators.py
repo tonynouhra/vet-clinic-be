@@ -181,15 +181,74 @@ class VersionAwareValidator:
 global_validator = VersionAwareValidator()
 
 
-# Convenience functions
+# Dynamic validation functions - scalable for any number of versions
+def validate_data_by_version(data: Dict[str, Any], version: str, resource: str) -> ValidationResult:
+    """Generic validation function that works with any version."""
+    return global_validator.validate(data, version, resource)
+
+
+def validate_data_with_latest(
+    data: Dict[str, Any], 
+    resource: str,
+    fallback_versions: List[str] = None
+) -> ValidationResult:
+    """Validate using the latest version with fallback to older versions."""
+    if fallback_versions is None:
+        # Get from your SUPPORTED_VERSIONS config
+        from . import SUPPORTED_VERSIONS
+        fallback_versions = sorted(SUPPORTED_VERSIONS, reverse=True)
+    
+    primary_version = fallback_versions[0] if fallback_versions else "v2"
+    
+    for version in fallback_versions:
+        result = global_validator.validate(data, version, resource, strict=False)
+        if result.is_valid:
+            if version != primary_version:
+                result.add_warning(f"Validated with {version} instead of {primary_version}")
+            return result
+    
+    # If all versions fail, return the result from the primary version
+    return global_validator.validate(data, primary_version, resource)
+
+
+# Generic validation with smart fallback
+def validate_with_smart_fallback(
+    data: Dict[str, Any], 
+    resource: str,
+    preferred_version: str = None
+) -> ValidationResult:
+    """Smart validation that tries preferred version first, then falls back."""
+    from . import DEFAULT_VERSION, SUPPORTED_VERSIONS
+    
+    if preferred_version is None:
+        preferred_version = DEFAULT_VERSION
+    
+    # Try preferred version first
+    result = validate_data_by_version(data, preferred_version, resource)
+    if result.is_valid:
+        return result
+    
+    # Try other versions as fallback
+    other_versions = [v for v in SUPPORTED_VERSIONS if v != preferred_version]
+    for version in reversed(other_versions):  # Try newer versions first
+        result = validate_data_by_version(data, version, resource)
+        if result.is_valid:
+            result.add_warning(f"Validated with {version} fallback instead of {preferred_version}")
+            return result
+    
+    # Return original failure if nothing works
+    return validate_data_by_version(data, preferred_version, resource)
+
+
+# Keep convenience functions but make them dynamic (legacy support)
 def validate_v1_data(data: Dict[str, Any], resource: str) -> ValidationResult:
-    """Validate data against V1 schema."""
-    return global_validator.validate(data, "v1", resource)
+    """Validate data against V1 schema (legacy support)."""
+    return validate_data_by_version(data, "v1", resource)
 
 
 def validate_v2_data(data: Dict[str, Any], resource: str) -> ValidationResult:
-    """Validate data against V2 schema."""
-    return global_validator.validate(data, "v2", resource)
+    """Validate data against V2 schema (legacy support)."""
+    return validate_data_by_version(data, "v2", resource)
 
 
 def validate_with_version_fallback(
@@ -198,10 +257,50 @@ def validate_with_version_fallback(
     primary_version: str = "v2", 
     fallback_version: str = "v1"
 ) -> ValidationResult:
-    """Validate data with version fallback."""
+    """Validate data with version fallback (legacy support)."""
     return global_validator.validate_with_fallback(
         data, primary_version, fallback_version, resource
     )
+
+
+# Version management utilities
+def get_supported_versions() -> List[str]:
+    """Get list of all supported API versions."""
+    from . import SUPPORTED_VERSIONS
+    return SUPPORTED_VERSIONS
+
+
+def get_latest_version() -> str:
+    """Get the latest supported API version."""
+    from . import DEFAULT_VERSION
+    return DEFAULT_VERSION
+
+
+def is_version_supported(version: str) -> bool:
+    """Check if a version is supported."""
+    return version in get_supported_versions()
+
+
+def get_version_for_resource(resource: str, preferred_version: str = None) -> str:
+    """Get the best version to use for a specific resource."""
+    if preferred_version and is_version_supported(preferred_version):
+        # Check if the resource exists in the preferred version
+        if global_validator.version_schemas.get(preferred_version, {}).get(resource):
+            return preferred_version
+    
+    # Fall back to latest version that has this resource
+    for version in reversed(get_supported_versions()):
+        if global_validator.version_schemas.get(version, {}).get(resource):
+            return version
+    
+    # Default to latest version
+    return get_latest_version()
+
+
+def validate_with_auto_version(data: Dict[str, Any], resource: str) -> ValidationResult:
+    """Automatically select the best version for validation."""
+    best_version = get_version_for_resource(resource)
+    return validate_data_by_version(data, best_version, resource)
 
 
 # Schema comparison utilities
