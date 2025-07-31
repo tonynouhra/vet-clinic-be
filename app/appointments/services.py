@@ -464,7 +464,7 @@ class AppointmentService:
         try:
             appointment = await self.get_appointment_by_id(appointment_id)
             
-            if not appointment.can_be_cancelled:
+            if not hasattr(appointment, "can_be_cancelled") or not appointment.can_be_cancelled:
                 raise ValidationError(f"Appointment with status {appointment.status} cannot be cancelled")
             
             appointment.cancel(cancellation_reason)

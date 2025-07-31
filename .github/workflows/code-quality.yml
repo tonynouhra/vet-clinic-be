@@ -1,0 +1,116 @@
+name: Code Quality Checks
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - "app/**/*.py"
+      - "tests/**/*.py"
+      - "requirements.txt"
+      - "alembic/**/*.py"
+
+jobs:
+  code-quality:
+    runs-on: ubuntu-latest
+    
+    # This job will be required by branch protection
+    if: github.event_name == 'pull_request'
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+          
+      - name: Cache pip dependencies
+        uses: actions/cache@v3
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+            
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install mypy pydocstyle bandit safety interrogate
+          
+      - name: Code formatting check (Black)
+        run: |
+          black --check --diff app/ tests/ alembic/
+          
+      - name: Import sorting check (isort)
+        run: |
+          isort --check-only --diff app/ tests/ alembic/
+          
+      - name: Linting (Flake8)
+        run: |
+          flake8 app/ tests/ alembic/ --max-line-length=88 --extend-ignore=E203,W503
+          
+      - name: Type checking (MyPy)
+        run: |
+          mypy app/ --ignore-missing-imports --disallow-untyped-defs --no-implicit-optional
+          
+      - name: Documentation coverage check
+        run: |
+          interrogate -v --ignore-init-method --ignore-magic --ignore-module --ignore-nested-functions --fail-under=80 app/
+          
+      - name: Docstring style check (pydocstyle)
+        run: |
+          pydocstyle app/ --convention=google --add-ignore=D100,D104,D105,D107
+          
+      - name: Security check (Bandit)
+        run: |
+          bandit -r app/ -f json -o bandit-report.json || true
+          bandit -r app/ --severity-level medium
+          
+      - name: Dependency vulnerability check (Safety)
+        run: |
+          safety check --json --output safety-report.json || true
+          safety check
+          
+      - name: Upload security reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-reports
+          path: |
+            bandit-report.json
+            safety-report.json
+            
+  test-coverage:
+    runs-on: ubuntu-latest
+    
+    # This job will be required by branch protection
+    if: github.event_name == 'pull_request'
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+          
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest-cov coverage
+          
+      - name: Run tests with coverage
+        run: |
+          pytest tests/ --cov=app --cov-report=xml --cov-report=html --cov-fail-under=70
+          
+      - name: Upload coverage reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-reports
+          path: |
+            coverage.xml
+            htmlcov/
