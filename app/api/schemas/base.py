@@ -86,7 +86,6 @@ class VersionedSchemaMixin(BaseModel):
     def create_version_schema(cls, version: str, exclude_fields: Optional[list] = None):
         """Create a schema for a specific version."""
         exclude_fields = exclude_fields or []
-        version_fields = cls.get_version_fields(version)
         
         # Create new schema class with version-specific fields
         class_name = f"{cls.__name__}_{version.upper()}"
@@ -173,10 +172,11 @@ def create_response_model(data_model: type, version: str = "v1") -> type:
     Returns:
         A new response model class
     """
+    version_default = version
     class ResponseModel(BaseSchema):
         success: bool = Field(True, description="Operation success flag")
         data: data_model = Field(description="Response data")
-        version: str = Field(version, description="API version")
+        version: str = Field(default=version_default, description="API version")
     
     ResponseModel.__name__ = f"{data_model.__name__}Response"
     return ResponseModel
@@ -194,12 +194,12 @@ def create_list_response_model(data_model: type, version: str = "v1") -> type:
         A new list response model class
     """
     from typing import List
-    
+    version_default= version
     class ListResponseModel(BaseSchema):
         success: bool = Field(True, description="Operation success flag")
         data: List[data_model] = Field(description="List of items")
         pagination: PaginationResponse = Field(description="Pagination metadata")
-        version: str = Field(version, description="API version")
+        version: str = Field(default=version_default, description="API version")
     
     ListResponseModel.__name__ = f"{data_model.__name__}ListResponse"
     return ListResponseModel
