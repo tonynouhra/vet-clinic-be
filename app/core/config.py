@@ -67,7 +67,7 @@ class Settings(BaseSettings):
         return []
 
     model_config = {
-        "env_file": f".env.{os.getenv(ENVIRONMENT, 'development')}",
+        "env_file": f".env.{os.getenv('ENVIRONMENT', 'development')}",
         "case_sensitive": True,
         "extra": "ignore"
     }

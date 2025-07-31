@@ -8,6 +8,7 @@ not available in V1.
 """
 
 from typing import Type, Any, Dict, Optional
+from pydantic import ConfigDict
 from ..base import (
     BaseSchema,
     TimestampMixin,
@@ -29,12 +30,14 @@ API_VERSION = "v2"
 class V2BaseSchema(BaseSchema, VersionedSchemaMixin):
     """Base schema for all V2 API models with enhanced features."""
     
-    class Config:
-        # V2 specific configuration - more flexible than V1
-        extra = "ignore"  # V2 allows extra fields for forward compatibility
-        validate_assignment = True
-        str_strip_whitespace = True
-        use_enum_values = True
+    model_config = ConfigDict(
+        # V2 specific configuration - explicit field whitelisting with enhanced features
+        extra = "ignore",  # V2 ignores extra fields (explicit whitelisting) for forward compatibility
+        validate_assignment = True,
+        str_strip_whitespace = True,
+        use_enum_values = True,
+        from_attributes = True
+    )
 
 
 class V2ResponseMixin(BaseSchema):

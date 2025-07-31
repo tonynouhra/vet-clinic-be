@@ -1,3 +1,4 @@
+
 """
 V1 API Schemas - Version-specific request/response models.
 
@@ -7,6 +8,7 @@ V1 represents the basic/legacy API contract with essential fields only.
 """
 
 from typing import Type, Any
+from pydantic import ConfigDict
 from ..base import (
     BaseSchema,
     TimestampMixin,
@@ -27,12 +29,14 @@ API_VERSION = "v1"
 # V1-specific base classes
 class V1BaseSchema(BaseSchema, VersionedSchemaMixin):
     """Base schema for all V1 API models with version-specific features."""
-    
-    class Config:
-        # V1 specific configuration
-        extra = "forbid"  # V1 is strict - no extra fields allowed
-        validate_assignment = True
-        str_strip_whitespace = True
+
+    model_config = ConfigDict(
+        # V1 specific configuration - explicit field whitelisting
+        extra = "ignore",  # Ignore extra fields not defined in schema (explicit whitelisting)
+        validate_assignment = True,
+        str_strip_whitespace = True,
+        from_attributes = True
+    )
 
 
 class V1ResponseMixin(BaseSchema):

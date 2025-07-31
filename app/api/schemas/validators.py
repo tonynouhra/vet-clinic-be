@@ -7,7 +7,6 @@ handling version-specific validation rules, and managing schema evolution.
 
 from typing import Dict, Any, List, Optional, Type, Union, Callable
 from pydantic import BaseModel, ValidationError
-from .base import BaseSchema
 
 
 class ValidationResult:
@@ -93,20 +92,56 @@ class VersionAwareValidator:
                     rule_result = rule(validated_data.model_dump())
                     if not rule_result.get('valid', True):
                         result.add_error(rule_result.get('error', 'Custom validation failed'))
-                except Exception as e:
+                except (TypeError, ValueError, KeyError) as e:
+                    error_msg = f"Custom validation rule failed - {type(e).__name__}: {str(e)}"
                     if strict:
-                        result.add_error(f"Custom validation rule failed: {str(e)}")
+                        result.add_error(error_msg)
                     else:
-                        result.add_warning(f"Custom validation rule warning: {str(e)}")
-            
+                        result.add_warning(f"Custom validation rule warning - {type(e).__name__}: {str(e)}")
+                except AttributeError as e:
+                    error_msg = f"Custom validation rule configuration error - {type(e).__name__}: {str(e)}"
+                    if strict:
+                        result.add_error(error_msg)
+                    else:
+                        result.add_warning(error_msg)
+                except Exception as e:
+                    error_msg = f"Unexpected error in custom validation rule - {type(e).__name__}: {str(e)}"
+                    if strict:
+                        result.add_error(error_msg)
+                    else:
+                        result.add_warning(error_msg)
+
             return result
-            
+
         except ValidationError as e:
-            errors = [f"{error['loc'][0] if error['loc'] else 'field'}: {error['msg']}" 
+            errors = [f"{error['loc'][0] if error['loc'] else 'field'}: {error['msg']}"
                      for error in e.errors()]
             return ValidationResult(is_valid=False, errors=errors)
+        except TypeError as e:
+            return ValidationResult(
+                is_valid=False,
+                errors=[f"Schema instantiation failed - invalid data types: {str(e)}"]
+            )
+        except ValueError as e:
+            return ValidationResult(
+                is_valid=False,
+                errors=[f"Schema validation failed - invalid values: {str(e)}"]
+            )
+        except KeyError as e:
+            return ValidationResult(
+                is_valid=False,
+                errors=[f"Schema validation failed - missing required field: {str(e)}"]
+            )
+        except AttributeError as e:
+            return ValidationResult(
+                is_valid=False,
+                errors=[f"Schema configuration error - invalid schema structure: {str(e)}"]
+            )
         except Exception as e:
-            return ValidationResult(is_valid=False, errors=[f"Validation failed: {str(e)}"])
+            return ValidationResult(
+                is_valid=False,
+                errors=[f"Unexpected validation error - {type(e).__name__}: {str(e)}"]
+            )
     
     def validate_with_fallback(
         self, 
@@ -334,11 +369,35 @@ def create_business_rule_validator(rule_name: str, validation_func: Callable) ->
                 "rule": rule_name,
                 "error": f"Business rule '{rule_name}' validation failed" if not is_valid else None
             }
+        except TypeError as e:
+            return {
+                "valid": False,
+                "rule": rule_name,
+                "error": f"Business rule '{rule_name}' type error - invalid data types: {str(e)}"
+            }
+        except ValueError as e:
+            return {
+                "valid": False,
+                "rule": rule_name,
+                "error": f"Business rule '{rule_name}' value error - invalid values: {str(e)}"
+            }
+        except KeyError as e:
+            return {
+                "valid": False,
+                "rule": rule_name,
+                "error": f"Business rule '{rule_name}' key error - missing field: {str(e)}"
+            }
+        except AttributeError as e:
+            return {
+                "valid": False,
+                "rule": rule_name,
+                "error": f"Business rule '{rule_name}' attribute error - invalid attribute access: {str(e)}"
+            }
         except Exception as e:
             return {
                 "valid": False,
                 "rule": rule_name,
-                "error": f"Business rule '{rule_name}' execution failed: {str(e)}"
+                "error": f"Business rule '{rule_name}' unexpected error - {type(e).__name__}: {str(e)}"
             }
     
     return validator
@@ -407,7 +466,7 @@ def email_field(description: str, default: Any = ...) -> Field:
     return Field(
         default=default,
         description=description,
-        regex=r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
+        pattern=r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
     )
 
 
@@ -416,7 +475,7 @@ def phone_field(description: str, default: Any = None) -> Field:
     return Field(
         default=default,
         description=description,
-        regex=r'^\+?[\d\s\-\(\)]{10,15}$'
+        pattern=r'^\+?[\d\s\-\(\)]{10,15}$'
     )
 
 

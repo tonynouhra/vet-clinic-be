@@ -56,7 +56,7 @@ class AppointmentCreateV2(AppointmentBaseV2):
 
     @validator('scheduled_at')
     def validate_scheduled_at(cls, v):
-        if v <= datetime.utcnow():
+        if v <= datetime.now():
             raise ValueError('Appointment must be scheduled in the future')
         return v
 
@@ -112,7 +112,7 @@ class AppointmentUpdateV2(BaseSchema):
 
     @validator('scheduled_at')
     def validate_scheduled_at(cls, v):
-        if v is not None and v <= datetime.utcnow():
+        if v is not None and v <= datetime.now():
             raise ValueError('Appointment must be scheduled in the future')
         return v
 
@@ -132,7 +132,7 @@ class AppointmentUpdateV2(BaseSchema):
     def validate_services_requested(cls, v):
         if v is not None:
             if len(v) == 0:
-                return None  # Allow clearing services
+                return []
             return list(set(service.strip() for service in v if service.strip()))
         return v
 
@@ -277,7 +277,7 @@ class AppointmentStatusUpdateV2(BaseSchema):
     @validator('follow_up_date')
     def validate_follow_up_date(cls, v, values):
         if v is not None:
-            if v <= datetime.utcnow():
+            if v <= datetime.now():
                 raise ValueError('Follow-up date must be in the future')
             if 'follow_up_required' in values and not values.get('follow_up_required'):
                 raise ValueError('Follow-up date can only be set when follow-up is required')
@@ -310,7 +310,7 @@ class AppointmentRescheduleV2(BaseSchema):
 
     @validator('new_scheduled_at')
     def validate_new_scheduled_at(cls, v):
-        if v <= datetime.utcnow():
+        if v <= datetime.now():
             raise ValueError('New appointment time must be in the future')
         return v
 
