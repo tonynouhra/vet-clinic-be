@@ -907,5 +907,3 @@ class TestAppointmentVersionCompatibility:
         
         # Both calls should work with the same service method
         assert mock_appointment_service.create_appointment.call_count == 2
-
-from datetime import timedelta
