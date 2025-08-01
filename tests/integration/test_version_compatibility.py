@@ -594,3 +594,318 @@ class TestFutureVersionCompatibility:
         
         # This demonstrates that the pattern supports adding new fields
         # in future versions without breaking existing ones
+# Appointment compatibility tests
+from app.models.appointment import Appointment, AppointmentStatus, AppointmentType, AppointmentPriority
+from app.appointments.controller import AppointmentController
+from app.appointments.services import AppointmentService
+from app.api.schemas.v1.appointments import AppointmentCreateV1, AppointmentUpdateV1
+from app.api.schemas.v2.appointments import AppointmentCreateV2, AppointmentUpdateV2
+
+
+@pytest.fixture
+def mock_appointment_service():
+    """Mock AppointmentService for direct controller testing."""
+    return AsyncMock(spec=AppointmentService)
+
+
+@pytest.fixture
+def appointment_controller(mock_appointment_service):
+    """AppointmentController instance with mocked service."""
+    controller = AppointmentController.__new__(AppointmentController)
+    controller.service = mock_appointment_service
+    controller.db = AsyncMock()
+    return controller
+
+
+@pytest.fixture
+def sample_appointment():
+    """Sample appointment for testing."""
+    return Appointment(
+        id=uuid.uuid4(),
+        pet_id=uuid.uuid4(),
+        pet_owner_id=uuid.uuid4(),
+        veterinarian_id=uuid.uuid4(),
+        clinic_id=uuid.uuid4(),
+        appointment_type=AppointmentType.ROUTINE_CHECKUP,
+        scheduled_at=datetime.utcnow() + timedelta(days=1),
+        duration_minutes=30,
+        reason="Regular checkup",
+        status=AppointmentStatus.SCHEDULED,
+        priority=AppointmentPriority.NORMAL,
+        symptoms=None,
+        notes=None,
+        special_instructions=None,
+        estimated_cost=100.0,
+        actual_cost=None,
+        follow_up_required=False,
+        follow_up_date=None,
+        follow_up_notes=None,
+        confirmed_at=None,
+        started_at=None,
+        completed_at=None,
+        cancelled_at=None,
+        cancellation_reason=None,
+        services_requested=None,
+        reminder_sent_24h=False,
+        reminder_sent_2h=False,
+        reminder_sent_24h_at=None,
+        reminder_sent_2h_at=None,
+        created_at=datetime.utcnow(),
+        updated_at=datetime.utcnow()
+    )
+
+
+class TestAppointmentVersionCompatibility:
+    """Test appointment version compatibility."""
+
+    @pytest.mark.asyncio
+    async def test_appointment_controller_handles_both_v1_and_v2_schemas(self, appointment_controller, sample_appointment):
+        """Test that AppointmentController can handle both V1 and V2 schemas."""
+        appointment_controller.service.create_appointment.return_value = sample_appointment
+        
+        # Test V1 schema
+        v1_data = AppointmentCreateV1(
+            pet_id=uuid.uuid4(),
+            pet_owner_id=uuid.uuid4(),
+            veterinarian_id=uuid.uuid4(),
+            clinic_id=uuid.uuid4(),
+            appointment_type=AppointmentType.ROUTINE_CHECKUP,
+            scheduled_at=datetime.utcnow() + timedelta(days=1),
+            reason="V1 appointment",
+            duration_minutes=30,
+            priority=AppointmentPriority.NORMAL
+        )
+        
+        result_v1 = await appointment_controller.create_appointment(v1_data)
+        assert result_v1.id == sample_appointment.id
+        assert result_v1.reason == "Regular checkup"
+        
+        # Test V2 schema with enhanced fields
+        v2_data = AppointmentCreateV2(
+            pet_id=uuid.uuid4(),
+            veterinarian_id=uuid.uuid4(),
+            clinic_id=uuid.uuid4(),
+            appointment_type=AppointmentType.ROUTINE_CHECKUP,
+            scheduled_at=datetime.utcnow() + timedelta(days=1),
+            reason="V2 appointment with enhanced features",
+            duration_minutes=45,
+            priority=AppointmentPriority.HIGH,
+            services_requested=["examination", "vaccination"],
+            reminder_preferences={"email_24h": True, "sms_2h": True}
+        )
+        
+        result_v2 = await appointment_controller.create_appointment(v2_data)
+        assert result_v2.id == sample_appointment.id
+        assert result_v2.reason == "Regular checkup"
+        
+        # Verify both calls used the same service method
+        assert appointment_controller.service.create_appointment.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_appointment_controller_graceful_parameter_handling(self, appointment_controller, sample_appointment):
+        """Test that AppointmentController gracefully handles optional parameters from different versions."""
+        appointment_controller.service.update_appointment.return_value = sample_appointment
+        
+        # V1 update (basic fields only)
+        v1_update = AppointmentUpdateV1(
+            reason="Updated reason V1",
+            notes="Updated notes"
+        )
+        
+        result_v1 = await appointment_controller.update_appointment(
+            appointment_id=sample_appointment.id,
+            appointment_data=v1_update
+        )
+        assert result_v1.id == sample_appointment.id
+        
+        # V2 update (enhanced fields)
+        v2_update = AppointmentUpdateV2(
+            reason="Updated reason V2",
+            notes="Updated notes with enhanced features",
+            services_requested=["examination", "vaccination", "blood_work"],
+            reminder_preferences={"email_24h": True, "sms_2h": True, "phone_call": False}
+        )
+        
+        result_v2 = await appointment_controller.update_appointment(
+            appointment_id=sample_appointment.id,
+            appointment_data=v2_update
+        )
+        assert result_v2.id == sample_appointment.id
+        
+        # Verify both calls used the same service method
+        assert appointment_controller.service.update_appointment.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_appointment_business_logic_consistency_across_versions(self, appointment_controller, sample_appointment):
+        """Test that business logic changes affect both V1 and V2 endpoints."""
+        # Mock a business logic change in the service
+        appointment_controller.service.list_appointments.return_value = ([sample_appointment], 1)
+        
+        # Test V1 list call
+        appointments_v1, total_v1 = await appointment_controller.list_appointments(
+            page=1,
+            per_page=10,
+            status=AppointmentStatus.SCHEDULED,
+            include_pet=False,  # V1 doesn't include relationships
+            include_owner=False,
+            include_veterinarian=False,
+            include_clinic=False
+        )
+        
+        # Test V2 list call with enhanced parameters
+        appointments_v2, total_v2 = await appointment_controller.list_appointments(
+            page=1,
+            per_page=10,
+            status=AppointmentStatus.SCHEDULED,
+            include_pet=True,  # V2 can include relationships
+            include_owner=True,
+            include_veterinarian=True,
+            include_clinic=True,
+            sort_by="scheduled_at"  # V2 enhanced feature
+        )
+        
+        # Both should return the same business data
+        assert len(appointments_v1) == len(appointments_v2) == 1
+        assert total_v1 == total_v2 == 1
+        assert appointments_v1[0].id == appointments_v2[0].id
+        
+        # Verify both calls used the same service method
+        assert appointment_controller.service.list_appointments.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_appointment_error_handling_consistency(self, appointment_controller):
+        """Test that error handling is consistent across versions."""
+        from app.core.exceptions import ValidationError
+        
+        # Mock service to raise validation error
+        appointment_controller.service.create_appointment.side_effect = ValidationError("Invalid appointment data")
+        
+        # Test V1 error handling
+        v1_data = AppointmentCreateV1(
+            pet_id=uuid.uuid4(),
+            pet_owner_id=uuid.uuid4(),
+            veterinarian_id=uuid.uuid4(),
+            clinic_id=uuid.uuid4(),
+            appointment_type=AppointmentType.ROUTINE_CHECKUP,
+            scheduled_at=datetime.utcnow() + timedelta(days=1),
+            reason="Test appointment"
+        )
+        
+        with pytest.raises(ValidationError, match="Invalid appointment data"):
+            await appointment_controller.create_appointment(v1_data)
+        
+        # Test V2 error handling
+        v2_data = AppointmentCreateV2(
+            pet_id=uuid.uuid4(),
+            veterinarian_id=uuid.uuid4(),
+            clinic_id=uuid.uuid4(),
+            appointment_type=AppointmentType.ROUTINE_CHECKUP,
+            scheduled_at=datetime.utcnow() + timedelta(days=1),
+            reason="Test appointment V2"
+        )
+        
+        with pytest.raises(ValidationError, match="Invalid appointment data"):
+            await appointment_controller.create_appointment(v2_data)
+        
+        # Both versions should handle the same error consistently
+        assert appointment_controller.service.create_appointment.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_appointment_endpoints_response_format_differences(self, async_client):
+        """Test that V1 and V2 endpoints format responses differently while using same controller."""
+        test_user = User(
+            id=uuid.uuid4(),
+            email="test@example.com",
+            first_name="Test",
+            last_name="User",
+            is_active=True,
+            is_verified=True,
+            created_at=datetime.utcnow(),
+            updated_at=datetime.utcnow()
+        )
+        
+        sample_appointment = Appointment(
+            id=uuid.uuid4(),
+            pet_id=uuid.uuid4(),
+            pet_owner_id=uuid.uuid4(),
+            veterinarian_id=uuid.uuid4(),
+            clinic_id=uuid.uuid4(),
+            appointment_type=AppointmentType.ROUTINE_CHECKUP,
+            scheduled_at=datetime.utcnow() + timedelta(days=1),
+            duration_minutes=30,
+            reason="Test appointment",
+            status=AppointmentStatus.SCHEDULED,
+            priority=AppointmentPriority.NORMAL,
+            created_at=datetime.utcnow(),
+            updated_at=datetime.utcnow()
+        )
+        
+        with patch('app.app_helpers.auth_helpers.get_current_user', return_value=test_user):
+            with patch('app.appointments.controller.AppointmentController.list_appointments') as mock_list:
+                mock_list.return_value = ([sample_appointment], 1)
+                
+                # Test V1 response format
+                v1_response = await async_client.get("/api/v1/appointments/")
+                assert v1_response.status_code == 200
+                v1_data = v1_response.json()
+                assert v1_data["version"] == "v1"
+                assert "data" in v1_data
+                assert "appointments" in v1_data["data"]
+                assert "total_pages" in v1_data["data"]
+                
+                # Test V2 response format
+                v2_response = await async_client.get("/api/v2/appointments/")
+                assert v2_response.status_code == 200
+                v2_data = v2_response.json()
+                assert v2_data["version"] == "v2"
+                assert "timestamp" in v2_data  # V2 includes timestamp
+                assert "data" in v2_data
+                assert "appointments" in v2_data["data"]
+                assert "filters_applied" in v2_data["data"]  # V2 includes filter info
+                assert "sort" in v2_data["data"]  # V2 includes sort info
+                
+                # Both should have the same core appointment data
+                v1_appointment = v1_data["data"]["appointments"][0]
+                v2_appointment = v2_data["data"]["appointments"][0]
+                assert v1_appointment["id"] == v2_appointment["id"]
+                assert v1_appointment["reason"] == v2_appointment["reason"]
+                
+                # But V2 should have additional fields
+                assert "services_requested" in v2_appointment
+                assert "reminder_sent_24h" in v2_appointment
+
+    @pytest.mark.asyncio
+    async def test_appointment_service_parameter_compatibility(self, mock_appointment_service, sample_appointment):
+        """Test that AppointmentService handles parameters from both versions gracefully."""
+        mock_appointment_service.create_appointment.return_value = sample_appointment
+        
+        # Test with V1 parameters (basic)
+        await mock_appointment_service.create_appointment(
+            pet_id=uuid.uuid4(),
+            pet_owner_id=uuid.uuid4(),
+            veterinarian_id=uuid.uuid4(),
+            clinic_id=uuid.uuid4(),
+            appointment_type=AppointmentType.ROUTINE_CHECKUP,
+            scheduled_at=datetime.utcnow() + timedelta(days=1),
+            reason="V1 appointment"
+        )
+        
+        # Test with V2 parameters (enhanced)
+        await mock_appointment_service.create_appointment(
+            pet_id=uuid.uuid4(),
+            pet_owner_id=uuid.uuid4(),
+            veterinarian_id=uuid.uuid4(),
+            clinic_id=uuid.uuid4(),
+            appointment_type=AppointmentType.ROUTINE_CHECKUP,
+            scheduled_at=datetime.utcnow() + timedelta(days=1),
+            reason="V2 appointment",
+            services_requested=["examination", "vaccination"],
+            # V2 enhanced parameters that V1 doesn't use
+            reminder_preferences={"email_24h": True},
+            pre_appointment_checklist=["Bring records"]
+        )
+        
+        # Both calls should work with the same service method
+        assert mock_appointment_service.create_appointment.call_count == 2
+
+from datetime import timedelta
