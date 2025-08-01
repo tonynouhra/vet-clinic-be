@@ -8,7 +8,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import settings
 from app.core.database import init_db, close_db
 from app.core.redis import redis_client
-from app.api.v1 import api_router
+from app.api.v1 import api_router as v1_router
+from app.api.v2 import api_router as v2_router
 
 
 @asynccontextmanager
@@ -40,8 +41,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Include API router
-app.include_router(api_router, prefix=settings.API_V1_STR)
+# Include API routers
+app.include_router(v1_router, prefix=settings.API_V1_STR)
+app.include_router(v2_router, prefix="/api/v2")
 
 
 @app.get("/")

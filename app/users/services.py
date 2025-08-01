@@ -94,8 +94,8 @@ class UserService:
                 count_query = count_query.where(and_(*conditions))
             
             # Add role information if requested (V2)
-            if include_roles:
-                query = query.options(selectinload(User.roles))
+            # Note: Role information is handled through the user_roles association table
+            # and would need to be loaded separately if needed
             
             # Get total count
             total_result = await self.db.execute(count_query)

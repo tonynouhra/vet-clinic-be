@@ -104,7 +104,7 @@ async def list_pets(
 async def create_pet(
     pet_data: PetCreateV1,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role([UserRole.CLINIC_ADMIN, UserRole.VETERINARIAN, UserRole.VET_TECH]))
+    current_user: User = Depends(require_role([UserRole.CLINIC_ADMIN, UserRole.VETERINARIAN]))
 ):
     """
     Create a new pet.
@@ -176,7 +176,7 @@ async def update_pet(
     pet_id: uuid.UUID,
     pet_data: PetUpdateV1,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role([UserRole.CLINIC_ADMIN, UserRole.VETERINARIAN, UserRole.VET_TECH]))
+    current_user: User = Depends(require_role([UserRole.CLINIC_ADMIN, UserRole.VETERINARIAN]))
 ):
     """
     Update pet information.

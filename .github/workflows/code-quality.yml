@@ -84,6 +84,9 @@ jobs:
             
   test-coverage:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
     
     # This job will be required by branch protection
     if: github.event_name == 'pull_request'
@@ -114,3 +117,10 @@ jobs:
           path: |
             coverage.xml
             htmlcov/
+            
+      - name: Coverage comment
+        uses: MishaKav/pytest-coverage-comment@main
+        with:
+          pytest-xml-coverage-path: ./coverage.xml
+          title: Coverage Report
+          badge-title: Coverage
