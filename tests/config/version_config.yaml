@@ -1,0 +1,238 @@
+# Dynamic API Testing Version Configuration
+# This file defines version-specific behaviors for the dynamic testing framework
+
+versions:
+  v1:
+    base_url: "/api/v1"
+    features:
+      health_records: false
+      statistics: false
+      enhanced_filtering: false
+      batch_operations: false
+    endpoints:
+      pets: "/api/v1/pets"
+      users: "/api/v1/users"
+      appointments: "/api/v1/appointments"
+    schema_fields:
+      pet_create: 
+        - "name"
+        - "species"
+        - "breed"
+        - "owner_id"
+        - "gender"
+        - "weight"
+        - "color"
+        - "birth_date"
+        - "microchip_id"
+        - "medical_notes"
+      pet_response:
+        - "id"
+        - "name"
+        - "species"
+        - "breed"
+        - "owner_id"
+        - "gender"
+        - "weight"
+        - "color"
+        - "birth_date"
+        - "microchip_id"
+        - "medical_notes"
+        - "created_at"
+        - "updated_at"
+      user_create:
+        - "email"
+        - "first_name"
+        - "last_name"
+        - "phone_number"
+      user_response:
+        - "id"
+        - "email"
+        - "first_name"
+        - "last_name"
+        - "phone_number"
+        - "created_at"
+        - "updated_at"
+    required_fields:
+      pet_create:
+        - "name"
+        - "species"
+        - "owner_id"
+      user_create:
+        - "email"
+        - "first_name"
+        - "last_name"
+    optional_fields:
+      pet_create:
+        - "breed"
+        - "gender"
+        - "weight"
+        - "color"
+        - "birth_date"
+        - "microchip_id"
+        - "medical_notes"
+      user_create:
+        - "phone_number"
+
+  v2:
+    base_url: "/api/v2"
+    features:
+      health_records: true
+      statistics: true
+      enhanced_filtering: true
+      batch_operations: true
+    endpoints:
+      pets: "/api/v2/pets"
+      users: "/api/v2/users"
+      appointments: "/api/v2/appointments"
+    schema_fields:
+      pet_create:
+        - "name"
+        - "species"
+        - "breed"
+        - "owner_id"
+        - "gender"
+        - "weight"
+        - "color"
+        - "birth_date"
+        - "microchip_id"
+        - "medical_notes"
+        - "temperament"
+        - "behavioral_notes"
+        - "emergency_contact"
+        - "additional_photos"
+      pet_response:
+        - "id"
+        - "name"
+        - "species"
+        - "breed"
+        - "owner_id"
+        - "gender"
+        - "weight"
+        - "color"
+        - "birth_date"
+        - "microchip_id"
+        - "medical_notes"
+        - "temperament"
+        - "behavioral_notes"
+        - "emergency_contact"
+        - "additional_photos"
+        - "created_at"
+        - "updated_at"
+      user_create:
+        - "email"
+        - "first_name"
+        - "last_name"
+        - "phone_number"
+        - "address"
+        - "emergency_contact"
+      user_response:
+        - "id"
+        - "email"
+        - "first_name"
+        - "last_name"
+        - "phone_number"
+        - "address"
+        - "emergency_contact"
+        - "pet_count"
+        - "created_at"
+        - "updated_at"
+      health_record_create:
+        - "pet_id"
+        - "record_type"
+        - "title"
+        - "description"
+        - "record_date"
+        - "medication_name"
+        - "dosage"
+        - "cost"
+        - "notes"
+      health_record_response:
+        - "id"
+        - "pet_id"
+        - "record_type"
+        - "title"
+        - "description"
+        - "record_date"
+        - "next_due_date"
+        - "medication_name"
+        - "dosage"
+        - "cost"
+        - "notes"
+        - "created_at"
+        - "updated_at"
+    required_fields:
+      pet_create:
+        - "name"
+        - "species"
+        - "owner_id"
+      user_create:
+        - "email"
+        - "first_name"
+        - "last_name"
+      health_record_create:
+        - "pet_id"
+        - "record_type"
+        - "title"
+        - "record_date"
+    optional_fields:
+      pet_create:
+        - "breed"
+        - "gender"
+        - "weight"
+        - "color"
+        - "birth_date"
+        - "microchip_id"
+        - "medical_notes"
+        - "temperament"
+        - "behavioral_notes"
+        - "emergency_contact"
+        - "additional_photos"
+      user_create:
+        - "phone_number"
+        - "address"
+        - "emergency_contact"
+      health_record_create:
+        - "description"
+        - "medication_name"
+        - "dosage"
+        - "cost"
+        - "notes"
+
+# Global test settings
+global_settings:
+  default_timeout: 30
+  max_retries: 3
+  parallel_execution: true
+  
+# Test data templates
+test_data_templates:
+  pet:
+    base_data:
+      name: "Test Pet"
+      species: "dog"
+      breed: "Mixed"
+      gender: "MALE"
+      weight: 25.0
+      color: "Brown"
+    field_generators:
+      owner_id: "generate_uuid"
+      microchip_id: "generate_microchip"
+      birth_date: "generate_past_date"
+  
+  user:
+    base_data:
+      first_name: "Test"
+      last_name: "User"
+      phone_number: "555-0123"
+    field_generators:
+      email: "generate_email"
+      
+  health_record:
+    base_data:
+      record_type: "VACCINATION"
+      title: "Test Vaccination"
+      description: "Test vaccination record"
+      cost: 45.00
+    field_generators:
+      pet_id: "generate_uuid"
+      record_date: "generate_recent_date"

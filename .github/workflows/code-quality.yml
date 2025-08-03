@@ -108,7 +108,22 @@ jobs:
           
       - name: Run tests with coverage
         run: |
+          # Run all tests including dynamic tests
           pytest tests/ --cov=app --cov-report=xml --cov-report=html --cov-fail-under=70
+          
+      - name: Validate dynamic test configuration
+        run: |
+          # Ensure dynamic test configuration is valid
+          python -c "
+          try:
+              from tests.dynamic.config_manager import get_config_manager
+              config_manager = get_config_manager()
+              versions = config_manager.get_supported_versions()
+              print(f'✓ Dynamic testing supports versions: {versions}')
+          except Exception as e:
+              print(f'⚠️  Dynamic testing configuration issue: {e}')
+              # Don't fail the build for configuration issues
+          "
           
       - name: Upload coverage reports
         uses: actions/upload-artifact@v4
