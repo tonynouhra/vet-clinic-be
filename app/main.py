@@ -207,7 +207,10 @@ async def root():
 
 # Add API routes
 from app.api import auth
+from app.api.v1 import api_router as v1_router
+
 app.include_router(auth.router, prefix=settings.API_V1_PREFIX)
+app.include_router(v1_router, prefix=settings.API_V1_PREFIX)
 
 
 if __name__ == "__main__":

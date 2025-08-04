@@ -227,6 +227,9 @@ class Veterinarian(Base):
     reviews = relationship("VeterinarianReview", back_populates="veterinarian", lazy="selectin", cascade="all, delete-orphan")
     health_records = relationship("HealthRecord", back_populates="veterinarian", lazy="selectin")
     
+    # Many-to-many relationship with pets
+    pets = relationship("Pet", secondary="pet_veterinarians", back_populates="veterinarians", lazy="selectin")
+    
     def __repr__(self) -> str:
         return f"<Veterinarian(id={self.id}, user_id={self.user_id}, license_number={self.license_number})>"
     

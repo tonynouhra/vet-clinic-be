@@ -29,49 +29,80 @@ class SchemaManager:
     
     def __init__(self):
         self.settings = get_settings()
-        
+
     async def get_database_tables(self) -> Dict[str, Set[str]]:
         """Get current database tables and their columns."""
         try:
             async with AsyncSessionLocal() as session:
-                # Get all table names
-                result = await session.execute(text("""
-                    SELECT table_name 
-                    FROM information_schema.tables 
-                    WHERE table_schema = 'public'
-                """))
-                
-                db_tables = {}
-                table_names = [row[0] for row in result.fetchall()]
-                
-                # Get columns for each table
+                logger.info("🔍 Starting database table detection...")
+
+                # Get table names using pg_tables
+                pg_result = await session.execute(text("""
+                                                       SELECT tablename
+                                                       FROM pg_tables
+                                                       WHERE schemaname = 'public'
+                                                       ORDER BY tablename
+                                                       """))
+
+                pg_rows = pg_result.fetchall()
+                logger.info(f"📋 pg_tables result: {pg_rows}")
+
+                if not pg_rows:
+                    logger.error("❌ No tables found in pg_tables!")
+                    return {}
+
+                table_names = [row[0] for row in pg_rows]
+                logger.info(f"📋 Found {len(table_names)} tables: {table_names}")
+
+                db_tables = {}  # Initialize the dictionary
+
+                # Get columns for each table (inside the session context)
                 for table_name in table_names:
-                    result = await session.execute(text(f"""
-                        SELECT column_name, data_type, is_nullable, column_default
-                        FROM information_schema.columns 
-                        WHERE table_name = '{table_name}' 
-                        AND table_schema = 'public'
-                        ORDER BY ordinal_position
-                    """))
-                    
-                    columns = set()
-                    for row in result.fetchall():
-                        column_name, data_type, is_nullable, default = row
-                        columns.add(column_name)
-                    
-                    db_tables[table_name] = columns
-                
+                    try:
+                        logger.info(f"🔍 Getting columns for table: {table_name}")
+
+                        col_result = await session.execute(text("""
+                                                                SELECT column_name
+                                                                FROM information_schema.columns
+                                                                WHERE table_name = :table_name
+                                                                  AND table_schema = 'public'
+                                                                ORDER BY ordinal_position
+                                                                """), {"table_name": table_name})
+
+                        column_rows = col_result.fetchall()
+                        columns = {row[0] for row in column_rows}
+
+                        db_tables[table_name] = columns
+                        logger.info(f"   ✅ {table_name}: {len(columns)} columns")
+
+                    except Exception as col_error:
+                        logger.error(f"❌ Error getting columns for {table_name}: {col_error}")
+                        continue
+
+                logger.info(f"📊 Final result: {len(db_tables)} tables processed")
                 return db_tables
-                
+
         except Exception as e:
-            logger.error(f"Error getting database schema: {e}")
+            logger.error(f"❌ Error in get_database_tables: {e}")
+            logger.error(f"   Error type: {type(e).__name__}")
+            import traceback
+            logger.error(f"   Traceback: {traceback.format_exc()}")
+            return {}
+
+        except Exception as e:
+            logger.error(f"❌ Error in get_database_tables: {e}")
+            logger.error(f"   Error type: {type(e).__name__}")
+            import traceback
+            logger.error(f"   Traceback: {traceback.format_exc()}")
             return {}
     
     def get_model_tables(self) -> Dict[str, Set[str]]:
         """Get tables and columns defined in SQLAlchemy models."""
         try:
-            # Import all models to register them
-            from app.models import user  # Add more as you create them
+            # Import all models to register them with Base.metadata
+            from app.models import (
+                user, pet, appointment, clinic, communication
+            )
             
             model_tables = {}
             
@@ -116,28 +147,36 @@ class SchemaManager:
                     new_columns[table_name] = missing_columns
         
         return new_tables, new_columns
-    
+
     async def create_missing_tables(self, new_tables: Set[str]) -> bool:
-        """Create only the missing tables."""
+        """Create only the missing tables, respecting foreign key dependencies."""
         if not new_tables:
             return True
-            
+
         try:
             logger.info(f"🆕 Creating new tables: {', '.join(sorted(new_tables))}")
-            
+
             async with engine.begin() as conn:
-                # Create only missing tables
+                # Get tables to create in dependency order
                 tables_to_create = []
                 for table_name in new_tables:
                     if table_name in Base.metadata.tables:
                         tables_to_create.append(Base.metadata.tables[table_name])
-                
+
+                if not tables_to_create:
+                    logger.warning("No valid tables found to create")
+                    return True
+
+                # Use the full Base.metadata to handle dependencies properly
+                # SQLAlchemy's create_all with checkfirst=True will only create missing tables
+                logger.info("🔧 Using full metadata to ensure proper foreign key handling...")
+                await conn.run_sync(Base.metadata.create_all, checkfirst=True)
+
                 for table in tables_to_create:
-                    await conn.execute(CreateTable(table))
                     logger.info(f"✅ Created table: {table.name}")
-            
+
             return True
-            
+
         except Exception as e:
             logger.error(f"Error creating tables: {e}")
             return False

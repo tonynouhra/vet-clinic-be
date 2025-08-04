@@ -35,7 +35,7 @@ class UserController:
         language: Optional[str] = None,    # V3 parameter
         is_active: Optional[bool] = None,
         **kwargs  # Handle any additional parameters from future versions
-    ) -> Dict[str, Any]:
+    ) -> Dict[str, Any] :
         """
         Handle user listing for all API versions.
         

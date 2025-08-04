@@ -5,6 +5,7 @@ Handles user authentication, roles, and profile information.
 
 from sqlalchemy import Column, String, Boolean, DateTime, JSON, Enum as SQLEnum
 from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from enum import Enum
 import uuid
@@ -30,19 +31,19 @@ class User(Base):
 
     # Primary key
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4, index=True)
-    
+
     # Authentication fields
     clerk_id = Column(String, unique=True, nullable=False, index=True)
     email = Column(String, unique=True, nullable=False, index=True)
-    
+
     # Profile fields
     first_name = Column(String, nullable=False)
     last_name = Column(String, nullable=False)
     phone_number = Column(String, nullable=True)
-    
+
     # Role and permissions
     role = Column(SQLEnum(UserRole), default=UserRole.PET_OWNER, nullable=False, index=True)
-    
+
     # Additional profile data (V2+ fields)
     department = Column(String, nullable=True)  # For staff members
     preferences = Column(JSON, nullable=True, default=dict)  # User preferences
@@ -50,15 +51,27 @@ class User(Base):
     timezone = Column(String, nullable=True, default="UTC")  # User timezone
     language = Column(String, nullable=True, default="en")  # Preferred language
     avatar_url = Column(String, nullable=True)  # Profile picture URL
-    
+
     # Status and metadata
     is_active = Column(Boolean, default=True, nullable=False, index=True)
     is_verified = Column(Boolean, default=False, nullable=False)
     last_login = Column(DateTime(timezone=True), nullable=True)
-    
+
     # Timestamps
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+
+    # Relationships
+    pets = relationship("Pet", back_populates="owner", lazy="dynamic")
+    appointments = relationship("Appointment", back_populates="pet_owner", lazy="dynamic")
+    veterinarian_profile = relationship("Veterinarian", back_populates="user", lazy="selectin", uselist=False)
+    conversations = relationship(
+        "Conversation",
+        secondary="conversation_participants",
+        back_populates="participants",
+        lazy="selectin"
+    )
+    messages_sent = relationship("Message", back_populates="sender", lazy="dynamic")
     
     def __repr__(self) -> str:
         return f"<User(id={self.id}, email={self.email}, role={self.role})>"

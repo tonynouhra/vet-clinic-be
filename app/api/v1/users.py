@@ -26,7 +26,7 @@ from app.api.schemas.v1.users import (
     RoleAssignmentV1
 )
 
-router = APIRouter(prefix="/users", tags=["users-v1"])
+router = APIRouter(tags=["users-v1"])
 
 
 # Helper function to convert User model to V1 response
@@ -61,11 +61,11 @@ async def list_users(
     
     Requires clinic admin role or higher.
     """
-    users, total = await controller.list_users(
+    users = await controller.list_users(
         page=page,
         per_page=per_page,
         search=search,
-        role=role,
+        role=role.value if role else None,
         is_active=is_active,
         include_roles=False  # V1 doesn't include roles
     )
@@ -74,6 +74,7 @@ async def list_users(
     user_responses = [user_to_v1_response(user) for user in users]
     
     # Calculate pagination metadata
+    total = users.get("total", 0)
     pages = (total + per_page - 1) // per_page
     
     return {
@@ -178,7 +179,7 @@ async def update_user(
 @router.delete("/{user_id}", response_model=UserOperationSuccessV1)
 async def delete_user(
     user_id: uuid.UUID,
-    current_user: User = Depends(require_role(UserRole.SYSTEM_ADMIN)),
+    current_user: User = Depends(require_role(UserRole.ADMIN)),
     controller: UserController = Depends(get_controller(UserController))
 ):
     """
@@ -248,7 +249,7 @@ async def deactivate_user(
 async def assign_role(
     user_id: uuid.UUID,
     role_data: RoleAssignmentV1,
-    current_user: User = Depends(require_role(UserRole.SYSTEM_ADMIN)),
+    current_user: User = Depends(require_role(UserRole.ADMIN)),
     controller: UserController = Depends(get_controller(UserController))
 ):
     """
@@ -273,7 +274,7 @@ async def assign_role(
 async def remove_role(
     user_id: uuid.UUID,
     role: UserRole,
-    current_user: User = Depends(require_role(UserRole.SYSTEM_ADMIN)),
+    current_user: User = Depends(require_role(UserRole.ADMIN)),
     controller: UserController = Depends(get_controller(UserController))
 ):
     """

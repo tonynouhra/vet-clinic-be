@@ -251,7 +251,7 @@ async def update_user_profile(
 @router.delete("/{user_id}", response_model=UserOperationSuccessV2)
 async def delete_user(
     user_id: uuid.UUID,
-    current_user: User = Depends(require_role(UserRole.SYSTEM_ADMIN)),
+    current_user: User = Depends(require_role(UserRole.ADMIN)),
     controller: UserController = Depends(get_controller(UserController))
 ):
     """
@@ -321,7 +321,7 @@ async def deactivate_user(
 async def assign_role(
     user_id: uuid.UUID,
     role_data: RoleAssignmentV2,
-    current_user: User = Depends(require_role(UserRole.SYSTEM_ADMIN)),
+    current_user: User = Depends(require_role(UserRole.ADMIN)),
     controller: UserController = Depends(get_controller(UserController))
 ):
     """
@@ -348,7 +348,7 @@ async def assign_role(
 async def assign_multiple_roles(
     user_id: uuid.UUID,
     roles_data: MultipleRoleAssignmentV2,
-    current_user: User = Depends(require_role(UserRole.SYSTEM_ADMIN)),
+    current_user: User = Depends(require_role(UserRole.ADMIN)),
     controller: UserController = Depends(get_controller(UserController))
 ):
     """
@@ -378,7 +378,7 @@ async def assign_multiple_roles(
 async def remove_role(
     user_id: uuid.UUID,
     role: UserRole,
-    current_user: User = Depends(require_role(UserRole.SYSTEM_ADMIN)),
+    current_user: User = Depends(require_role(UserRole.ADMIN)),
     controller: UserController = Depends(get_controller(UserController))
 ):
     """
@@ -447,7 +447,7 @@ async def get_user_stats(
 @router.post("/batch", response_model=BatchOperationResultV2)
 async def batch_create_users(
     batch_data: BatchUserCreateV2,
-    current_user: User = Depends(require_role(UserRole.SYSTEM_ADMIN)),
+    current_user: User = Depends(require_role(UserRole.ADMIN)),
     controller: UserController = Depends(get_controller(UserController))
 ):
     """

@@ -14,9 +14,10 @@ from datetime import date
 import uuid
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import relationship
 
 from app.core.database import get_db
-from app.api.deps import get_current_user, require_any_role
+from app.api.deps import get_current_user, require_any_role, require_role
 from app.models.user import User, UserRole
 from app.models.pet import PetGender, PetSize
 from app.pets.controller import PetController

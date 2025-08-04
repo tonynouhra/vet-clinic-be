@@ -6,12 +6,26 @@ from datetime import date, datetime
 from enum import Enum
 from typing import Optional
 
-from sqlalchemy import Column, String, DateTime, Text, ForeignKey, Date, Float, Integer, Boolean
+from sqlalchemy import Column, String, DateTime, Text, ForeignKey, Date, Float, Integer, Boolean, Table
 from sqlalchemy.dialects.postgresql import UUID, ENUM, JSON
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
 from app.core.database import Base
+
+
+# Association table for pet-veterinarian many-to-many relationship
+pet_veterinarians = Table(
+    'pet_veterinarians',
+    Base.metadata,
+    Column('pet_id', UUID(as_uuid=True), ForeignKey('pets.id', ondelete='CASCADE'), primary_key=True),
+    Column('veterinarian_id', UUID(as_uuid=True), ForeignKey('veterinarians.id', ondelete='CASCADE'), primary_key=True),
+    Column('relationship_type', String(50), nullable=True),  # primary, specialist, emergency, consultant, etc.
+    Column('is_primary', Boolean, default=False, nullable=False),  # Mark primary veterinarian
+    Column('notes', Text, nullable=True),  # Additional notes about the relationship
+    Column('created_at', DateTime(timezone=True), server_default=func.now(), nullable=False),
+    Column('updated_at', DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False),
+)
 
 
 class PetGender(str, Enum):
@@ -104,6 +118,9 @@ class Pet(Base):
     health_records = relationship("HealthRecord", back_populates="pet", lazy="selectin", cascade="all, delete-orphan")
     appointments = relationship("Appointment", back_populates="pet", lazy="selectin")
     reminders = relationship("Reminder", back_populates="pet", lazy="selectin", cascade="all, delete-orphan")
+    
+    # Many-to-many relationship with veterinarians
+    veterinarians = relationship("Veterinarian", secondary="pet_veterinarians", back_populates="pets", lazy="selectin")
     
     def __repr__(self) -> str:
         return f"<Pet(id={self.id}, name={self.name}, species={self.species}, owner_id={self.owner_id})>"
@@ -225,6 +242,6 @@ class Reminder(Base):
     # Relationships
     pet = relationship("Pet", back_populates="reminders", lazy="selectin")
     health_record = relationship("HealthRecord", lazy="selectin")
-    
+
     def __repr__(self) -> str:
         return f"<Reminder(id={self.id}, pet_id={self.pet_id}, title={self.title}, due_date={self.due_date})>"

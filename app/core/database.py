@@ -71,8 +71,8 @@ async def init_db() -> None:
     if settings.ENVIRONMENT == "development":
         try:
             async with engine.begin() as conn:
-                # Import all models to ensure they're registered
-                from app.models import user, pet, appointment, clinic, communication
+                # Import all models to ensure they're registered (order matters for foreign keys)
+                from app.models import user, pet, clinic, appointment, communication
 
                 # Create all tables if they don't exist
                 await conn.run_sync(Base.metadata.create_all)
