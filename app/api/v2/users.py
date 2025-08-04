@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
 from app.models.user import User, UserRole
 from app.users.controller import UserController
-from app.app_helpers.auth_helpers import get_current_user, require_role
+from app.api.deps import get_current_user, require_role
 from app.app_helpers.dependency_helpers import get_controller
 from app.api.schemas.v2.users import (
     UserCreateV2,
@@ -83,7 +83,7 @@ async def list_users(
     department: Optional[str] = Query(None, description="Filter by department"),
     include_roles: bool = Query(False, description="Include role information"),
     include_relationships: bool = Query(False, description="Include pet/appointment counts"),
-    current_user: User = Depends(require_role(UserRole.CLINIC_ADMIN)),
+    current_user: User = Depends(require_role(UserRole.CLINIC_MANAGER)),
     controller: UserController = Depends(get_controller(UserController))
 ):
     """
@@ -128,7 +128,7 @@ async def list_users(
 @router.post("/", response_model=UserResponseModelV2, status_code=status.HTTP_201_CREATED)
 async def create_user(
     user_data: UserCreateV2,
-    current_user: User = Depends(require_role(UserRole.CLINIC_ADMIN)),
+    current_user: User = Depends(require_role(UserRole.CLINIC_MANAGER)),
     controller: UserController = Depends(get_controller(UserController))
 ):
     """
@@ -164,7 +164,7 @@ async def get_user(
     Users can view their own profile, admins can view any profile.
     """
     # Check authorization
-    if user_id != current_user.id and not current_user.is_clinic_admin():
+    if user_id != current_user.id and current_user.role not in [UserRole.ADMIN, UserRole.CLINIC_MANAGER]:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Not authorized to view this user"
@@ -197,7 +197,7 @@ async def update_user(
     Users can update their own profile, admins can update any profile.
     """
     # Check authorization
-    if user_id != current_user.id and not current_user.is_clinic_admin():
+    if user_id != current_user.id and current_user.role not in [UserRole.ADMIN, UserRole.CLINIC_MANAGER]:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Not authorized to update this user"
@@ -274,7 +274,7 @@ async def delete_user(
 @router.post("/{user_id}/activate", response_model=UserResponseModelV2)
 async def activate_user(
     user_id: uuid.UUID,
-    current_user: User = Depends(require_role(UserRole.CLINIC_ADMIN)),
+    current_user: User = Depends(require_role(UserRole.CLINIC_MANAGER)),
     controller: UserController = Depends(get_controller(UserController))
 ):
     """
@@ -297,7 +297,7 @@ async def activate_user(
 @router.post("/{user_id}/deactivate", response_model=UserResponseModelV2)
 async def deactivate_user(
     user_id: uuid.UUID,
-    current_user: User = Depends(require_role(UserRole.CLINIC_ADMIN)),
+    current_user: User = Depends(require_role(UserRole.CLINIC_MANAGER)),
     controller: UserController = Depends(get_controller(UserController))
 ):
     """
@@ -413,7 +413,7 @@ async def get_user_stats(
     Users can view their own stats, admins can view any user's stats.
     """
     # Check authorization
-    if user_id != current_user.id and not current_user.is_clinic_admin():
+    if user_id != current_user.id and current_user.role not in [UserRole.ADMIN, UserRole.CLINIC_MANAGER]:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Not authorized to view this user's statistics"

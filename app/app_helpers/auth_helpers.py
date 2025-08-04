@@ -12,6 +12,7 @@ import logging
 
 from app.core.config import get_settings
 from app.core.exceptions import AuthenticationError, AuthorizationError
+from app.services.clerk_service import get_clerk_service
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -22,7 +23,7 @@ security = HTTPBearer()
 
 async def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)) -> Dict[str, Any]:
     """
-    Verify JWT token and extract user information.
+    Verify JWT token using Clerk authentication and extract user information.
     
     Args:
         credentials: HTTP Bearer credentials from request
@@ -34,37 +35,25 @@ async def verify_token(credentials: HTTPAuthorizationCredentials = Depends(secur
         AuthenticationError: If token is invalid or expired
     """
     try:
-        # Decode JWT token
-        payload = jwt.decode(
-            credentials.credentials,
-            settings.JWT_SECRET_KEY,
-            algorithms=[settings.JWT_ALGORITHM]
-        )
+        clerk_service = get_clerk_service()
         
-        # Check token expiration
-        exp = payload.get("exp")
-        if exp and datetime.utcnow().timestamp() > exp:
-            raise AuthenticationError("Token has expired")
+        # Use Clerk service to verify JWT token with proper signature validation
+        token_data = await clerk_service.verify_jwt_token(credentials.credentials)
         
-        # Extract user information
-        user_id = payload.get("sub")
-        if not user_id:
-            raise AuthenticationError("Invalid token: missing user ID")
-        
+        # Return standardized user information
         return {
-            "user_id": user_id,
-            "email": payload.get("email"),
-            "role": payload.get("role", "pet_owner"),
-            "clerk_id": payload.get("clerk_id"),
-            "permissions": payload.get("permissions", []),
-            "exp": exp
+            "user_id": token_data.get("user_id"),
+            "clerk_id": token_data.get("clerk_id"),
+            "email": token_data.get("email"),
+            "role": token_data.get("role", "pet_owner"),
+            "permissions": token_data.get("permissions", []),
+            "exp": token_data.get("exp"),
+            "session_id": token_data.get("session_id")
         }
         
-    except jwt.ExpiredSignatureError:
-        raise AuthenticationError("Token has expired")
-    except jwt.InvalidTokenError as e:
-        logger.warning(f"Invalid token: {e}")
-        raise AuthenticationError("Invalid token")
+    except AuthenticationError:
+        # Re-raise Clerk authentication errors as-is
+        raise
     except Exception as e:
         logger.error(f"Token verification error: {e}")
         raise AuthenticationError("Token verification failed")
@@ -239,7 +228,10 @@ def create_access_token(
     expires_delta: Optional[timedelta] = None
 ) -> str:
     """
-    Create a JWT access token for a user.
+    Create a JWT access token for development/testing purposes.
+    
+    Note: In production, tokens are created by Clerk's frontend SDK.
+    This function is only used for development and testing scenarios.
     
     Args:
         user_id: User ID
@@ -252,6 +244,9 @@ def create_access_token(
     Returns:
         str: Encoded JWT token
     """
+    if settings.ENVIRONMENT == "production":
+        logger.warning("create_access_token called in production - tokens should be created by Clerk")
+    
     if expires_delta:
         expire = datetime.utcnow() + expires_delta
     else:
@@ -263,7 +258,8 @@ def create_access_token(
         "role": role,
         "exp": expire.timestamp(),
         "iat": datetime.utcnow().timestamp(),
-        "type": "access_token"
+        "type": "access_token",
+        "iss": settings.CLERK_JWT_ISSUER
     }
     
     if clerk_id:
@@ -272,6 +268,7 @@ def create_access_token(
     if permissions:
         payload["permissions"] = permissions
     
+    # For development, use simple HS256. In production, Clerk uses RS256
     return jwt.encode(payload, settings.JWT_SECRET_KEY, algorithm=settings.JWT_ALGORITHM)
 
 

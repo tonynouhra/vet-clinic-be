@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
 from app.models.appointment import Appointment, AppointmentStatus, AppointmentType, AppointmentPriority
 from app.appointments.controller import AppointmentController
-from app.app_helpers.auth_helpers import get_current_user, require_role
+from app.api.deps import get_current_user, require_role
 from app.app_helpers.dependency_helpers import get_controller
 from app.api.schemas.v2.appointments import (
     AppointmentCreateV2,

@@ -19,7 +19,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.app_helpers.auth_helpers import get_current_user, require_role
+from app.api.deps import get_current_user, require_role
 from app.models.user import User, UserRole
 from app.models.pet import PetGender, PetSize, HealthRecordType
 from app.pets.controller import PetController
@@ -152,7 +152,7 @@ async def list_pets(
 async def create_pet(
     pet_data: PetCreateV2,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role([UserRole.CLINIC_ADMIN, UserRole.VETERINARIAN]))
+    current_user: User = Depends(require_role([UserRole.CLINIC_MANAGER, UserRole.VETERINARIAN]))
 ):
     """
     Create a new pet with enhanced information.
@@ -226,7 +226,7 @@ async def update_pet(
     pet_id: uuid.UUID,
     pet_data: PetUpdateV2,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role([UserRole.CLINIC_ADMIN, UserRole.VETERINARIAN]))
+    current_user: User = Depends(require_role([UserRole.CLINIC_MANAGER, UserRole.VETERINARIAN]))
 ):
     """
     Update pet information with enhanced fields.
@@ -261,7 +261,7 @@ async def update_pet(
 async def delete_pet(
     pet_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role([UserRole.CLINIC_ADMIN, UserRole.SYSTEM_ADMIN]))
+    current_user: User = Depends(require_role([UserRole.CLINIC_MANAGER, UserRole.ADMIN]))
 ):
     """
     Delete a pet.
@@ -385,7 +385,7 @@ async def mark_pet_deceased(
     pet_id: uuid.UUID,
     deceased_data: DeceasedPetRequestV2,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role([UserRole.CLINIC_ADMIN, UserRole.VETERINARIAN]))
+    current_user: User = Depends(require_role([UserRole.CLINIC_MANAGER, UserRole.VETERINARIAN]))
 ):
     """
     Mark a pet as deceased with enhanced information.
@@ -501,7 +501,7 @@ async def add_health_record(
     pet_id: uuid.UUID,
     record_data: HealthRecordCreateV2,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role([UserRole.CLINIC_ADMIN, UserRole.VETERINARIAN]))
+    current_user: User = Depends(require_role([UserRole.CLINIC_MANAGER, UserRole.VETERINARIAN]))
 ):
     """
     Add a health record to a pet.
@@ -569,7 +569,7 @@ async def get_pet_health_records(
 async def batch_pet_operation(
     batch_data: BatchPetOperationV2,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role([UserRole.CLINIC_ADMIN, UserRole.SYSTEM_ADMIN]))
+    current_user: User = Depends(require_role([UserRole.CLINIC_MANAGER, UserRole.ADMIN]))
 ):
     """
     Perform batch operations on multiple pets.

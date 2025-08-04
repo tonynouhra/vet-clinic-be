@@ -34,10 +34,12 @@ class Settings(BaseSettings):
     CELERY_RESULT_BACKEND: str
     
     # Authentication Settings (Clerk)
+    CLERK_API_URL: str = "https://api.clerk.com"
     CLERK_SECRET_KEY: str
     CLERK_PUBLISHABLE_KEY: str
     CLERK_WEBHOOK_SECRET: Optional[str] = None
     CLERK_JWT_ISSUER: str = "https://clerk.dev"
+    CLERK_JWKS_URL: Optional[str] = None
     JWT_SECRET_KEY: str
     JWT_ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30

@@ -15,7 +15,7 @@
   - Write unit tests for ClerkService methods
   - _Requirements: 1.1, 1.3, 4.1, 4.2, 6.1, 6.3_
 
-- [ ] 3. Create Clerk user data models and DTOs
+- [x] 3. Create Clerk user data models and DTOs
 
   - Define ClerkUser Pydantic model for API responses in app/schemas/clerk_schemas.py
   - Create role mapping configuration for Clerk metadata to internal roles
@@ -23,7 +23,7 @@
   - Write unit tests for data model validation and role mapping
   - _Requirements: 2.2, 3.2, 3.3, 3.4_
 
-- [ ] 4. Implement JWT token validation and user authentication
+- [x] 4. Implement JWT token validation and user authentication
 
   - Update verify_token function in app/app_helpers/auth_helpers.py to use Clerk JWT validation
   - Implement Clerk public key fetching and caching for JWT signature verification
@@ -31,7 +31,7 @@
   - Create comprehensive unit tests for token validation scenarios
   - _Requirements: 1.1, 1.3, 4.1, 4.2, 4.4_
 
-- [ ] 5. Create user synchronization service
+- [x] 5. Create user synchronization service
 
   - Implement UserSyncService class in app/services/user_sync_service.py
   - Add methods for creating and updating local users from Clerk data

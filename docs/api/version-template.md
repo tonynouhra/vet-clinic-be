@@ -178,7 +178,7 @@ from app.api.schemas.v{N}.users import (
 )
 from app.app_helpers.dependency_helpers import get_controller
 from app.app_helpers.response_helpers import success_response, created_response
-from app.app_helpers.auth_helpers import get_current_user, require_role
+from app.api.deps import get_current_user, require_role
 
 router = APIRouter()
 

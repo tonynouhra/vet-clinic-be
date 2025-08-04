@@ -1,50 +1,50 @@
 """
 API dependencies and middleware.
 """
-from typing import AsyncGenerator, Optional
+from typing import Optional, Dict, Any
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.core.redis import redis_client
-from app.core.exceptions import AuthenticationError, AuthorizationError
+from app.core.exceptions import AuthenticationError
+from app.services.clerk_service import get_clerk_service
+from app.services.user_sync_service import UserSyncService
+from app.models.user import User, UserRole
+from app.schemas.clerk_schemas import ClerkUser
 
 
 # Security scheme for JWT tokens
 security = HTTPBearer()
 
 
-async def get_current_user(
-    credentials: HTTPAuthorizationCredentials = Depends(security),
-    db: AsyncSession = Depends(get_db)
-):
+async def verify_clerk_token(
+    credentials: HTTPAuthorizationCredentials = Depends(security)
+) -> Dict[str, Any]:
     """
-    Get current authenticated user from JWT token.
+    Verify JWT token with Clerk and extract user information.
     
     Args:
         credentials: JWT token credentials
-        db: Database session
         
     Returns:
-        User: Current authenticated user
+        Dict containing user information from token
         
     Raises:
-        HTTPException: If authentication fails
+        HTTPException: If token verification fails
     """
-    # This is a placeholder implementation
-    # In a real implementation, you would:
-    # 1. Verify the JWT token with Clerk
-    # 2. Extract user information from the token
-    # 3. Fetch user from database
-    # 4. Return user object
-    
     try:
-        token = credentials.credentials
-        # TODO: Implement JWT token verification with Clerk
-        # For now, raise authentication error
-        raise AuthenticationError("Authentication not implemented yet")
-    except Exception as e:
+        clerk_service = get_clerk_service()
+        token_data = await clerk_service.verify_jwt_token(credentials.credentials)
+        return token_data
+    except AuthenticationError as e:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=str(e),
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    except Exception:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Could not validate credentials",
@@ -52,9 +52,85 @@ async def get_current_user(
         )
 
 
+async def sync_clerk_user(
+    token_data: Dict[str, Any] = Depends(verify_clerk_token),
+    db: AsyncSession = Depends(get_db)
+) -> User:
+    """
+    Ensure user exists in local database and sync with Clerk data.
+    
+    Args:
+        token_data: Verified token data from Clerk
+        db: Database session
+        
+    Returns:
+        User: Local user object
+        
+    Raises:
+        HTTPException: If user sync fails
+    """
+    try:
+        clerk_service = get_clerk_service()
+        user_sync_service = UserSyncService(db)
+        
+        # Get full user data from Clerk
+        clerk_user = await clerk_service.get_user_by_clerk_id(token_data["clerk_id"])
+        
+        # Sync user data
+        sync_response = await user_sync_service.sync_user_data(clerk_user)
+        
+        if not sync_response.success:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"User synchronization failed: {sync_response.message}"
+            )
+        
+        # Get the local user
+        local_user = await user_sync_service.get_user_by_clerk_id(token_data["clerk_id"])
+        if not local_user:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="User not found after synchronization"
+            )
+        
+        return local_user
+        
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="User synchronization failed"
+        )
+
+
+async def get_current_user(
+    user: User = Depends(sync_clerk_user)
+) -> User:
+    """
+    Get current authenticated user from JWT token with Clerk integration.
+    
+    Args:
+        user: Synchronized user from Clerk
+        
+    Returns:
+        User: Current authenticated user
+        
+    Raises:
+        HTTPException: If authentication fails
+    """
+    if not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="User account is inactive"
+        )
+    
+    return user
+
+
 async def get_current_active_user(
-    current_user = Depends(get_current_user)
-):
+    current_user: User = Depends(get_current_user)
+) -> User:
     """
     Get current active user (not disabled).
     
@@ -67,9 +143,7 @@ async def get_current_active_user(
     Raises:
         HTTPException: If user is disabled
     """
-    # This is a placeholder implementation
-    # In a real implementation, you would check if user is active
-    if hasattr(current_user, 'is_active') and not current_user.is_active:
+    if not current_user.is_active:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Inactive user"
@@ -77,9 +151,9 @@ async def get_current_active_user(
     return current_user
 
 
-async def require_role(required_role: str):
+def require_role(required_role: UserRole):
     """
-    Dependency factory for role-based access control.
+    Dependency factory for role-based access control with Clerk integration.
     
     Args:
         required_role: Required user role
@@ -87,17 +161,132 @@ async def require_role(required_role: str):
     Returns:
         function: Dependency function
     """
-    async def role_checker(current_user = Depends(get_current_active_user)):
-        # This is a placeholder implementation
-        # In a real implementation, you would check user roles
-        if not hasattr(current_user, 'role') or current_user.role != required_role:
+    async def role_checker(current_user: User = Depends(get_current_active_user)) -> User:
+        if current_user.role != required_role:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="Insufficient permissions"
+                detail=f"Access denied. Required role: {required_role.value}, current role: {current_user.role.value}"
             )
         return current_user
     
     return role_checker
+
+
+def require_any_role(required_roles: list[UserRole]):
+    """
+    Dependency factory for role-based access control allowing multiple roles.
+    
+    Args:
+        required_roles: List of acceptable user roles
+        
+    Returns:
+        function: Dependency function
+    """
+    async def role_checker(current_user: User = Depends(get_current_active_user)) -> User:
+        if current_user.role not in required_roles:
+            role_names = [role.value for role in required_roles]
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Access denied. Required roles: {', '.join(role_names)}, current role: {current_user.role.value}"
+            )
+        return current_user
+    
+    return role_checker
+
+
+def require_permission(required_permission: str):
+    """
+    Dependency factory for permission-based access control.
+    
+    Args:
+        required_permission: Required permission
+        
+    Returns:
+        function: Dependency function
+    """
+    async def permission_checker(current_user: User = Depends(get_current_active_user)) -> User:
+        if not current_user.has_permission(required_permission):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Access denied. Required permission: {required_permission}"
+            )
+        return current_user
+    
+    return permission_checker
+
+
+def require_staff_role():
+    """
+    Dependency that requires user to be staff (admin, veterinarian, receptionist, or clinic manager).
+    
+    Returns:
+        function: Dependency function
+    """
+    return require_any_role([
+        UserRole.ADMIN,
+        UserRole.VETERINARIAN,
+        UserRole.RECEPTIONIST,
+        UserRole.CLINIC_MANAGER
+    ])
+
+
+def require_admin_role():
+    """
+    Dependency that requires admin role.
+    
+    Returns:
+        function: Dependency function
+    """
+    return require_role(UserRole.ADMIN)
+
+
+def require_veterinarian_role():
+    """
+    Dependency that requires veterinarian role.
+    
+    Returns:
+        function: Dependency function
+    """
+    return require_role(UserRole.VETERINARIAN)
+
+
+async def get_optional_user(
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(HTTPBearer(auto_error=False)),
+    db: AsyncSession = Depends(get_db)
+) -> Optional[User]:
+    """
+    Get current user if authenticated, otherwise return None.
+    Used for endpoints that work with or without authentication.
+    
+    Args:
+        credentials: Optional JWT token credentials
+        db: Database session
+        
+    Returns:
+        User or None: Current user if authenticated, None otherwise
+    """
+    if not credentials:
+        return None
+    
+    try:
+        # Verify token
+        clerk_service = get_clerk_service()
+        token_data = await clerk_service.verify_jwt_token(credentials.credentials)
+        
+        # Sync user
+        user_sync_service = UserSyncService(db)
+        clerk_user = await clerk_service.get_user_by_clerk_id(token_data["clerk_id"])
+        
+        sync_response = await user_sync_service.sync_user_data(clerk_user)
+        if not sync_response.success:
+            return None
+        
+        local_user = await user_sync_service.get_user_by_clerk_id(token_data["clerk_id"])
+        return local_user if local_user and local_user.is_active else None
+        
+    except Exception:
+        # If any error occurs, just return None (no authentication)
+        return None
 
 
 async def get_redis_client():
@@ -120,7 +309,7 @@ class RateLimiter:
     async def __call__(
         self,
         request,
-        redis_client = Depends(get_redis_client)
+        redis_client=Depends(get_redis_client)
     ):
         """
         Check rate limit for the request.
@@ -139,7 +328,7 @@ class RateLimiter:
         # 3. Increment counter or raise rate limit error
         
         # For now, just pass through
-        pass
+        return
 
 
 # Common rate limiters
