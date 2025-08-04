@@ -1,32 +1,46 @@
-# FastAPI and core dependencies
+# FastAPI and ASGI server
 fastapi==0.104.1
 uvicorn[standard]==0.24.0
-pydantic==2.5.0
-pydantic-settings==2.1.0
 
 # Database
 sqlalchemy==2.0.23
 asyncpg==0.29.0
-alembic==1.13.1
+alembic==1.12.1
+
+# Pydantic and validation
+pydantic==2.5.0
+pydantic-settings==2.1.0
+email-validator==2.1.0
+
+# Authentication
+python-jose[cryptography]==3.3.0
+python-multipart==0.0.6
+passlib[bcrypt]==1.7.4
 
 # Redis and Celery
 redis==5.0.1
 celery==5.3.4
 
-# Authentication
-python-jose[cryptography]==3.3.0
-passlib[bcrypt]==1.7.4
-python-multipart==0.0.6
-
 # HTTP client
 httpx==0.25.2
+
+# Development and testing
+pytest==7.4.3
+pytest-asyncio==0.21.1
+pytest-mock==3.12.0
+pytest-cov==4.1.0
+
+# Logging and monitoring
+structlog==23.2.0
+
+# File handling
+python-multipart==0.0.6
+pillow==10.1.0
 
 # Environment and configuration
 python-dotenv==1.0.0
 
-# Development dependencies
-pytest==7.4.3
-pytest-asyncio==0.21.1
-black==23.11.0
-isort==5.12.0
-flake8==6.1.0
+# Production server
+gunicorn==21.2.0
+
+# CORS (built into FastAPI, no need for separate package)

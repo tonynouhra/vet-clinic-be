@@ -1,151 +1,161 @@
 """
-User models with Clerk integration and role-based access control.
+User model and related enums for the Veterinary Clinic Backend.
+Handles user authentication, roles, and profile information.
 """
-import uuid
-from datetime import datetime
-from enum import Enum
-from typing import List, Optional
 
-from sqlalchemy import Column, String, DateTime, Boolean, Text, ForeignKey, Table
-from sqlalchemy.dialects.postgresql import UUID, ENUM
-from sqlalchemy.orm import relationship
+from sqlalchemy import Column, String, Boolean, DateTime, JSON, Enum as SQLEnum
+from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.sql import func
+from enum import Enum
+import uuid
 
 from app.core.database import Base
 
 
 class UserRole(str, Enum):
-    """User role enumeration."""
-    PET_OWNER = "pet_owner"
+    """User roles in the veterinary clinic system."""
+    ADMIN = "admin"
     VETERINARIAN = "veterinarian"
-    CLINIC_ADMIN = "clinic_admin"
-    SYSTEM_ADMIN = "system_admin"
-
-
-# Association table for many-to-many relationship between users and roles
-user_roles = Table(
-    'user_roles',
-    Base.metadata,
-    Column('user_id', UUID(as_uuid=True), ForeignKey('users.id'), primary_key=True),
-    Column('role', ENUM(UserRole), primary_key=True),
-    Column('assigned_at', DateTime(timezone=True), server_default=func.now()),
-    Column('assigned_by', UUID(as_uuid=True), ForeignKey('users.id'), nullable=True)
-)
+    RECEPTIONIST = "receptionist"
+    PET_OWNER = "pet_owner"
+    CLINIC_MANAGER = "clinic_manager"
 
 
 class User(Base):
-    """User model with Clerk integration."""
-    
+    """
+    User model for authentication and profile management.
+    Integrates with Clerk for authentication and supports role-based access control.
+    """
     __tablename__ = "users"
-    
+
     # Primary key
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4, index=True)
     
-    # Clerk integration
-    clerk_id = Column(String(255), unique=True, nullable=False, index=True)
+    # Authentication fields
+    clerk_id = Column(String, unique=True, nullable=False, index=True)
+    email = Column(String, unique=True, nullable=False, index=True)
     
-    # Basic user information
-    email = Column(String(255), unique=True, nullable=False, index=True)
-    first_name = Column(String(100), nullable=False)
-    last_name = Column(String(100), nullable=False)
-    phone_number = Column(String(20), nullable=True)
+    # Profile fields
+    first_name = Column(String, nullable=False)
+    last_name = Column(String, nullable=False)
+    phone_number = Column(String, nullable=True)
     
-    # Profile information
-    profile_image_url = Column(String(500), nullable=True)
-    bio = Column(Text, nullable=True)
+    # Role and permissions
+    role = Column(SQLEnum(UserRole), default=UserRole.PET_OWNER, nullable=False, index=True)
     
-    # Account status
-    is_active = Column(Boolean, default=True, nullable=False)
+    # Additional profile data (V2+ fields)
+    department = Column(String, nullable=True)  # For staff members
+    preferences = Column(JSON, nullable=True, default=dict)  # User preferences
+    notification_settings = Column(JSON, nullable=True, default=dict)  # Notification preferences
+    timezone = Column(String, nullable=True, default="UTC")  # User timezone
+    language = Column(String, nullable=True, default="en")  # Preferred language
+    avatar_url = Column(String, nullable=True)  # Profile picture URL
+    
+    # Status and metadata
+    is_active = Column(Boolean, default=True, nullable=False, index=True)
     is_verified = Column(Boolean, default=False, nullable=False)
+    last_login = Column(DateTime(timezone=True), nullable=True)
     
     # Timestamps
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
-    last_login_at = Column(DateTime(timezone=True), nullable=True)
-    
-    # Note: roles relationship is handled through the user_roles association table
-    # The roles are accessed via the user_roles table directly
-    
-    # Relationship to pets (for pet owners)
-    pets = relationship("Pet", back_populates="owner", lazy="selectin")
-    
-    # Relationship to appointments (as pet owner)
-    appointments = relationship("Appointment", back_populates="pet_owner", lazy="selectin")
-    
-    # Relationship to veterinarian profile (if user is a veterinarian)
-    veterinarian_profile = relationship("Veterinarian", back_populates="user", uselist=False, lazy="selectin")
-    
-    # Relationship to conversations
-    conversations = relationship("Conversation", secondary="conversation_participants", back_populates="participants", lazy="selectin")
-    
-    # Relationship to messages sent
-    messages_sent = relationship("Message", back_populates="sender", lazy="selectin")
     
     def __repr__(self) -> str:
-        return f"<User(id={self.id}, email={self.email}, clerk_id={self.clerk_id})>"
+        return f"<User(id={self.id}, email={self.email}, role={self.role})>"
     
     @property
     def full_name(self) -> str:
         """Get user's full name."""
         return f"{self.first_name} {self.last_name}"
     
-    def has_role(self, role: UserRole) -> bool:
-        """Check if user has a specific role."""
-        # This would need to be implemented with a database query
-        # For now, return False as placeholder
-        return False
+    @property
+    def is_staff(self) -> bool:
+        """Check if user is staff member."""
+        return self.role in [UserRole.ADMIN, UserRole.VETERINARIAN, UserRole.RECEPTIONIST, UserRole.CLINIC_MANAGER]
     
-    def is_pet_owner(self) -> bool:
-        """Check if user is a pet owner."""
-        return self.has_role(UserRole.PET_OWNER)
+    @property
+    def is_admin(self) -> bool:
+        """Check if user is admin."""
+        return self.role == UserRole.ADMIN
     
+    @property
     def is_veterinarian(self) -> bool:
-        """Check if user is a veterinarian."""
-        return self.has_role(UserRole.VETERINARIAN)
+        """Check if user is veterinarian."""
+        return self.role == UserRole.VETERINARIAN
     
-    def is_clinic_admin(self) -> bool:
-        """Check if user is a clinic admin."""
-        return self.has_role(UserRole.CLINIC_ADMIN)
+    def has_permission(self, permission: str) -> bool:
+        """
+        Check if user has specific permission.
+        
+        Args:
+            permission: Permission to check
+            
+        Returns:
+            bool: True if user has permission
+        """
+        # Basic role-based permissions
+        role_permissions = {
+            UserRole.ADMIN: ["*"],  # Admin has all permissions
+            UserRole.VETERINARIAN: [
+                "pets:read", "pets:write", "appointments:read", "appointments:write",
+                "health_records:read", "health_records:write", "users:read"
+            ],
+            UserRole.RECEPTIONIST: [
+                "appointments:read", "appointments:write", "users:read", "pets:read"
+            ],
+            UserRole.CLINIC_MANAGER: [
+                "clinic:read", "clinic:write", "staff:read", "appointments:read",
+                "reports:read"
+            ],
+            UserRole.PET_OWNER: [
+                "pets:read", "pets:write", "appointments:read", "appointments:write",
+                "profile:read", "profile:write"
+            ]
+        }
+        
+        user_permissions = role_permissions.get(self.role, [])
+        
+        # Admin has all permissions
+        if "*" in user_permissions:
+            return True
+        
+        return permission in user_permissions
     
-    def is_system_admin(self) -> bool:
-        """Check if user is a system admin."""
-        return self.has_role(UserRole.SYSTEM_ADMIN)
-
-
-class UserSession(Base):
-    """User session model for tracking active sessions."""
-    
-    __tablename__ = "user_sessions"
-    
-    # Primary key
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    
-    # Foreign key to user
-    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True)
-    
-    # Session information
-    session_token = Column(String(500), unique=True, nullable=False, index=True)
-    refresh_token = Column(String(500), unique=True, nullable=True, index=True)
-    
-    # Session metadata
-    ip_address = Column(String(45), nullable=True)  # IPv6 compatible
-    user_agent = Column(Text, nullable=True)
-    device_info = Column(Text, nullable=True)
-    
-    # Session status
-    is_active = Column(Boolean, default=True, nullable=False)
-    
-    # Timestamps
-    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
-    expires_at = Column(DateTime(timezone=True), nullable=False)
-    last_accessed_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
-    
-    # Relationships
-    user = relationship("User", lazy="selectin")
-    
-    def __repr__(self) -> str:
-        return f"<UserSession(id={self.id}, user_id={self.user_id}, is_active={self.is_active})>"
-    
-    def is_expired(self) -> bool:
-        """Check if session is expired."""
-        return datetime.utcnow() > self.expires_at
+    def to_dict(self, include_sensitive: bool = False) -> dict:
+        """
+        Convert user to dictionary representation.
+        
+        Args:
+            include_sensitive: Whether to include sensitive fields
+            
+        Returns:
+            dict: User data as dictionary
+        """
+        data = {
+            "id": str(self.id),
+            "email": self.email,
+            "first_name": self.first_name,
+            "last_name": self.last_name,
+            "full_name": self.full_name,
+            "phone_number": self.phone_number,
+            "role": self.role.value,
+            "department": self.department,
+            "timezone": self.timezone,
+            "language": self.language,
+            "avatar_url": self.avatar_url,
+            "is_active": self.is_active,
+            "is_verified": self.is_verified,
+            "is_staff": self.is_staff,
+            "last_login": self.last_login.isoformat() if self.last_login else None,
+            "created_at": self.created_at.isoformat(),
+            "updated_at": self.updated_at.isoformat(),
+        }
+        
+        if include_sensitive:
+            data.update({
+                "clerk_id": self.clerk_id,
+                "preferences": self.preferences,
+                "notification_settings": self.notification_settings,
+            })
+        
+        return data

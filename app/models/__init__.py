@@ -1,66 +1,37 @@
 """
-Database models package.
+Database models for the Veterinary Clinic Backend.
+Contains SQLAlchemy models for all entities in the system.
 """
-# Import all models here to ensure they are registered with SQLAlchemy
-from .user import User, UserSession, UserRole, user_roles
-from .pet import Pet, HealthRecord, Reminder, PetGender, PetSize, HealthRecordType
-from .clinic import (
-    Clinic, ClinicOperatingHours, Veterinarian, VeterinarianAvailability,
-    ClinicReview, VeterinarianReview, ClinicType, VeterinarianSpecialty,
-    DayOfWeek, veterinarian_specialties
-)
-from .appointment import (
-    Appointment, AppointmentSlot, AppointmentStatus, AppointmentType,
-    AppointmentPriority
-)
-from .communication import (
-    Conversation, Message, MessageReaction, ChatBot, NotificationPreference,
-    ConversationType, MessageType, MessageStatus, conversation_participants
-)
 
-# Export all models for easy importing
+from .user import User, UserRole
+from .pet import Pet, PetGender, HealthRecord, HealthRecordType
+from .appointment import Appointment, AppointmentStatus, AppointmentType
+from .clinic import Clinic, Veterinarian, VeterinarianSpecialty
+from .communication import Conversation, Message, MessageType
+
 __all__ = [
     # User models
     "User",
-    "UserSession", 
     "UserRole",
-    "user_roles",
     
     # Pet models
     "Pet",
-    "HealthRecord",
-    "Reminder",
     "PetGender",
-    "PetSize", 
+    "HealthRecord",
     "HealthRecordType",
-    
-    # Clinic models
-    "Clinic",
-    "ClinicOperatingHours",
-    "Veterinarian",
-    "VeterinarianAvailability",
-    "ClinicReview",
-    "VeterinarianReview",
-    "ClinicType",
-    "VeterinarianSpecialty",
-    "DayOfWeek",
-    "veterinarian_specialties",
     
     # Appointment models
     "Appointment",
-    "AppointmentSlot",
     "AppointmentStatus",
     "AppointmentType",
-    "AppointmentPriority",
+    
+    # Clinic models
+    "Clinic",
+    "Veterinarian",
+    "VeterinarianSpecialty",
     
     # Communication models
     "Conversation",
     "Message",
-    "MessageReaction",
-    "ChatBot",
-    "NotificationPreference",
-    "ConversationType",
     "MessageType",
-    "MessageStatus",
-    "conversation_participants",
 ]

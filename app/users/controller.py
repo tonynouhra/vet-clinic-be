@@ -1,517 +1,434 @@
 """
-Version-agnostic User Controller
-
-This controller handles HTTP request processing and business logic orchestration
-for user-related operations across all API versions. It accepts Union types for
-different API version schemas and returns raw data that can be formatted by any version.
+Version-agnostic User controller for HTTP request processing and business logic orchestration.
+Handles user-related operations across all API versions with shared business logic.
 """
 
-from typing import List, Optional, Union, Dict, Any, Tuple
-import uuid
-from fastapi import Depends, HTTPException, status
+from typing import List, Optional, Union, Dict, Any
 from sqlalchemy.ext.asyncio import AsyncSession
-from pydantic import BaseModel
+from datetime import datetime
+import logging
 
-from app.core.database import get_db
-from app.core.exceptions import VetClinicException, NotFoundError, ValidationError
 from app.models.user import User, UserRole
+from app.core.exceptions import ValidationError, ConflictError, NotFoundError, BusinessLogicError
+from app.app_helpers.validation_helpers import validate_pagination_params, validate_email, validate_uuid
 from .services import UserService
-from ..app_helpers import validate_pagination_params
+
+logger = logging.getLogger(__name__)
 
 
 class UserController:
     """Version-agnostic controller for user-related operations."""
 
-    def __init__(self, db: AsyncSession = Depends(get_db)):
-        self.service = UserService(db)
+    def __init__(self, db: AsyncSession):
         self.db = db
+        self.service = UserService(db)
+        self.current_user: Optional[Dict[str, Any]] = None
 
     async def list_users(
         self,
         page: int = 1,
-        per_page: int = 10,
+        size: int = 20,
         search: Optional[str] = None,
-        role: Optional[Union[UserRole, str]] = None,
+        role: Optional[str] = None,
+        department: Optional[str] = None,  # V2 parameter
+        timezone: Optional[str] = None,    # V3 parameter
+        language: Optional[str] = None,    # V3 parameter
         is_active: Optional[bool] = None,
-        include_roles: bool = False,  # V2 parameter
-        **kwargs
-    ) -> Tuple[List[User], int]:
+        **kwargs  # Handle any additional parameters from future versions
+    ) -> Dict[str, Any]:
         """
-        List users with pagination and filtering.
-        Handles business rules and validation before delegating to service.
+        Handle user listing for all API versions.
         
         Args:
-            page: Page number (1-based)
-            per_page: Items per page
-            search: Search term for name or email
-            role: Filter by user role
-            is_active: Filter by active status
-            include_roles: Include role information (V2)
-            **kwargs: Additional parameters for future versions
+            page: Page number
+            size: Page size
+            search: Search term
+            role: Role filter
+            department: Department filter (V2+)
+            timezone: Timezone filter (V3+)
+            language: Language filter (V3+)
+            is_active: Active status filter
+            **kwargs: Additional parameters from future versions
             
         Returns:
-            Tuple of (users list, total count)
-            
-        Raises:
-            HTTPException: For validation errors or business rule violations
+            Dict containing users and pagination info
         """
         try:
-            # Validate pagination parameters
-            page,page_size=validate_pagination_params(page=page, size=per_page)
+            # Validate pagination
+            page, size = validate_pagination_params(page, size)
+
+            # Validate role if provided
+            role_enum = None
+            if role:
+                try:
+                    role_enum = UserRole(role)
+                except ValueError:
+                    raise ValidationError(
+                        message="Invalid role value",
+                        field="role",
+                        value=role,
+                        details={"valid_roles": [r.value for r in UserRole]}
+                    )
+
             # Delegate to service
             users, total = await self.service.list_users(
                 page=page,
-                per_page=per_page,
+                size=size,
                 search=search,
-                role=role,
+                role=role_enum,
+                department=department,
+                timezone=timezone,
+                language=language,
                 is_active=is_active,
-                include_roles=include_roles,
                 **kwargs
             )
-            
-            return users, total
-            
-        except VetClinicException as e:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
-        except Exception as e:
-            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Internal server error")
 
-    async def get_user_by_id(
-        self,
-        user_id: uuid.UUID,
-        include_roles: bool = False,
-        include_relationships: bool = False,
-        **kwargs
-    ) -> User:
-        """
-        Get user by ID with optional related data.
-        
-        Args:
-            user_id: User UUID
-            include_roles: Include role information (V2)
-            include_relationships: Include pet/appointment relationships (V2)
-            **kwargs: Additional parameters for future versions
-            
-        Returns:
-            User object
-            
-        Raises:
-            HTTPException: If user not found or validation errors
-        """
-        try:
-            user = await self.service.get_user_by_id(
-                user_id=user_id,
-                include_roles=include_roles,
-                include_relationships=include_relationships,
-                **kwargs
-            )
-            return user
-            
-        except NotFoundError as e:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
-        except VetClinicException as e:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+            return {
+                "users": users,
+                "total": total,
+                "page": page,
+                "size": size
+            }
+
+        except (ValidationError, BusinessLogicError):
+            raise
         except Exception as e:
-            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Internal server error")
+            logger.error(f"Error in list_users: {e}")
+            raise BusinessLogicError(f"Failed to list users: {str(e)}")
 
     async def create_user(
         self,
-        user_data: Union[BaseModel, Dict[str, Any]],
-        created_by: Optional[uuid.UUID] = None,
-        **kwargs
+        user_data: Union[Any, Dict[str, Any]]  # Can be any version's schema
     ) -> User:
         """
-        Create a new user.
-        Accepts Union[UserCreateV1, UserCreateV2] for create operations.
+        Handle user creation for all API versions.
         
         Args:
-            user_data: User creation data (V1 or V2 schema)
-            created_by: ID of user creating this user
-            **kwargs: Additional parameters for future versions
+            user_data: User creation data (any version schema)
             
         Returns:
-            Created user object
-            
-        Raises:
-            HTTPException: For validation errors or business rule violations
+            User: Created user entity
         """
         try:
             # Extract data from schema or dict
-            if isinstance(user_data, BaseModel):
-                data = user_data.model_dump(exclude_unset=True)
+            if hasattr(user_data, 'dict'):
+                # Pydantic model
+                data = user_data.dict()
             else:
+                # Dictionary
                 data = user_data
-            
-            # Business rule validation
-            await self._validate_user_creation(data, created_by)
-            
-            # Extract common fields
+
+            # Validate required fields
             email = data.get("email")
             first_name = data.get("first_name")
             last_name = data.get("last_name")
-            phone_number = data.get("phone_number")
-            role = data.get("role", UserRole.PET_OWNER)
-            
-            # Extract V2 fields if present
-            bio = data.get("bio")
-            profile_image_url = data.get("profile_image_url")
-            department = data.get("department")
-            preferences = data.get("preferences")
             clerk_id = data.get("clerk_id")
+
+            if not all([email, first_name, last_name]):
+                raise ValidationError("Email, first_name, and last_name are required")
+
+            # Validate email format
+            email = validate_email(email)
+
+            # Check for existing user
+            existing_user = await self.service.get_user_by_email(email)
+            if existing_user:
+                raise ConflictError(
+                    message="User with this email already exists",
+                    conflicting_resource="email",
+                    details={"email": email}
+                )
+
+            # Check for existing Clerk ID if provided
+            if clerk_id:
+                existing_clerk_user = await self.service.get_user_by_clerk_id(clerk_id)
+                if existing_clerk_user:
+                    raise ConflictError(
+                        message="User with this Clerk ID already exists",
+                        conflicting_resource="clerk_id",
+                        details={"clerk_id": clerk_id}
+                    )
+
+            # Extract common fields present in all versions
+            create_params = {
+                "email": email,
+                "first_name": first_name,
+                "last_name": last_name,
+                "clerk_id": clerk_id or f"temp_{datetime.utcnow().timestamp()}",
+            }
+
+            # Handle optional fields present in all versions
+            if data.get("phone_number"):
+                create_params["phone_number"] = data["phone_number"]
+
+            # Handle version-specific fields dynamically
+            version_fields = [
+                "role", "department", "preferences", "notification_settings",
+                "timezone", "language", "avatar_url"
+            ]
             
-            # Create user
-            user = await self.service.create_user(
-                email=email,
-                first_name=first_name,
-                last_name=last_name,
-                phone_number=phone_number,
-                role=role,
-                clerk_id=clerk_id,
-                bio=bio,
-                profile_image_url=profile_image_url,
-                department=department,
-                preferences=preferences,
-                **kwargs
-            )
+            for field in version_fields:
+                if field in data and data[field] is not None:
+                    create_params[field] = data[field]
+
+            # Delegate to service
+            user = await self.service.create_user(**create_params)
             
+            logger.info(f"User created successfully: {user.id}")
             return user
-            
-        except ValidationError as e:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
-        except VetClinicException as e:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+        except (ValidationError, ConflictError, BusinessLogicError):
+            raise
         except Exception as e:
-            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Internal server error")
+            logger.error(f"Error in create_user: {e}")
+            raise BusinessLogicError(f"Failed to create user: {str(e)}")
+
+    async def get_user(self, user_id: str) -> User:
+        """
+        Handle user retrieval for all API versions.
+        
+        Args:
+            user_id: User ID
+            
+        Returns:
+            User: User entity
+            
+        Raises:
+            NotFoundError: If user not found
+        """
+        try:
+            # Validate UUID format
+            validate_uuid(user_id, "user_id")
+
+            # Get user from service
+            user = await self.service.get_user_by_id(user_id)
+            if not user:
+                raise NotFoundError(
+                    message="User not found",
+                    resource_type="User",
+                    resource_id=user_id
+                )
+
+            return user
+
+        except (ValidationError, NotFoundError):
+            raise
+        except Exception as e:
+            logger.error(f"Error in get_user: {e}")
+            raise BusinessLogicError(f"Failed to get user: {str(e)}")
 
     async def update_user(
         self,
-        user_id: uuid.UUID,
-        user_data: Union[BaseModel, Dict[str, Any]],
-        updated_by: Optional[uuid.UUID] = None,
-        **kwargs
+        user_id: str,
+        user_data: Union[Any, Dict[str, Any]]  # Can be any version's schema
     ) -> User:
         """
-        Update user information.
-        Accepts Union[UserUpdateV1, UserUpdateV2] for update operations.
+        Handle user updates for all API versions.
         
         Args:
-            user_id: User UUID
-            user_data: User update data (V1 or V2 schema)
-            updated_by: ID of user making the update
-            **kwargs: Additional parameters for future versions
+            user_id: User ID to update
+            user_data: Update data (any version schema)
             
         Returns:
-            Updated user object
-            
-        Raises:
-            HTTPException: For validation errors or business rule violations
+            User: Updated user entity
         """
         try:
+            # Validate UUID format
+            validate_uuid(user_id, "user_id")
+
             # Extract data from schema or dict
-            if isinstance(user_data, BaseModel):
-                data = user_data.model_dump(exclude_unset=True)
+            if hasattr(user_data, 'dict'):
+                # Pydantic model - only include set fields
+                data = user_data.dict(exclude_unset=True)
             else:
+                # Dictionary
                 data = user_data
+
+            # Validate email if being updated
+            if "email" in data:
+                data["email"] = validate_email(data["email"])
+                
+                # Check for email conflicts
+                existing_user = await self.service.get_user_by_email(data["email"])
+                if existing_user and str(existing_user.id) != user_id:
+                    raise ConflictError(
+                        message="User with this email already exists",
+                        conflicting_resource="email",
+                        details={"email": data["email"]}
+                    )
+
+            # Business rule: Only allow certain fields to be updated
+            allowed_fields = {
+                "first_name", "last_name", "phone_number", "role", "department",
+                "preferences", "notification_settings", "timezone", "language",
+                "avatar_url", "is_active"
+            }
             
-            # Business rule validation
-            await self._validate_user_update(user_id, data, updated_by)
+            update_params = {
+                field: value for field, value in data.items()
+                if field in allowed_fields and value is not None
+            }
+
+            if not update_params:
+                raise ValidationError("No valid fields provided for update")
+
+            # Authorization check: Users can only update their own profile unless admin
+            if self.current_user:
+                current_user_id = self.current_user.get("user_id")
+                current_user_role = self.current_user.get("role")
+                
+                # Non-admin users can only update their own profile
+                if current_user_role != "admin" and current_user_id != user_id:
+                    raise BusinessLogicError(
+                        "You can only update your own profile",
+                        rule="profile_ownership"
+                    )
+                
+                # Non-admin users cannot change their role
+                if "role" in update_params and current_user_role != "admin":
+                    raise BusinessLogicError(
+                        "Only administrators can change user roles",
+                        rule="role_change_permission"
+                    )
+
+            # Delegate to service
+            user = await self.service.update_user(user_id, **update_params)
             
-            # Update user
-            user = await self.service.update_user(user_id=user_id, **data, **kwargs)
-            
+            logger.info(f"User updated successfully: {user_id}")
             return user
-            
-        except NotFoundError as e:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
-        except ValidationError as e:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
-        except VetClinicException as e:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
-        except Exception as e:
-            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Internal server error")
 
-    async def delete_user(
-        self,
-        user_id: uuid.UUID,
-        deleted_by: Optional[uuid.UUID] = None,
-        **kwargs
-    ) -> Dict[str, Any]:
+        except (ValidationError, ConflictError, NotFoundError, BusinessLogicError):
+            raise
+        except Exception as e:
+            logger.error(f"Error in update_user: {e}")
+            raise BusinessLogicError(f"Failed to update user: {str(e)}")
+
+    async def delete_user(self, user_id: str) -> bool:
         """
-        Delete a user.
+        Handle user deletion for all API versions.
         
         Args:
-            user_id: User UUID
-            deleted_by: ID of user performing the deletion
-            **kwargs: Additional parameters for future versions
+            user_id: User ID to delete
             
         Returns:
-            Success confirmation
-            
-        Raises:
-            HTTPException: For validation errors or business rule violations
+            bool: True if user was deleted
         """
         try:
-            # Business rule validation
-            await self._validate_user_deletion(user_id, deleted_by)
-            
-            # Delete user
-            await self.service.delete_user(user_id)
-            
-            return {"success": True, "message": "User deleted successfully"}
-            
-        except NotFoundError as e:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
-        except ValidationError as e:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
-        except VetClinicException as e:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
-        except Exception as e:
-            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Internal server error")
+            # Validate UUID format
+            validate_uuid(user_id, "user_id")
 
-    async def activate_user(
-        self,
-        user_id: uuid.UUID,
-        activated_by: Optional[uuid.UUID] = None,
-        **kwargs
-    ) -> User:
+            # Authorization check: Only admins can delete users
+            if self.current_user:
+                current_user_role = self.current_user.get("role")
+                if current_user_role != "admin":
+                    raise BusinessLogicError(
+                        "Only administrators can delete users",
+                        rule="delete_permission"
+                    )
+
+            # Business rule: Cannot delete yourself
+            if self.current_user and self.current_user.get("user_id") == user_id:
+                raise BusinessLogicError(
+                    "You cannot delete your own account",
+                    rule="self_deletion_prevention"
+                )
+
+            # Delegate to service
+            result = await self.service.delete_user(user_id)
+            
+            logger.info(f"User deleted successfully: {user_id}")
+            return result
+
+        except (ValidationError, NotFoundError, BusinessLogicError):
+            raise
+        except Exception as e:
+            logger.error(f"Error in delete_user: {e}")
+            raise BusinessLogicError(f"Failed to delete user: {str(e)}")
+
+    async def get_current_user_profile(self) -> User:
         """
-        Activate a user account.
+        Get current authenticated user's profile.
+        
+        Returns:
+            User: Current user entity
+        """
+        try:
+            if not self.current_user:
+                raise BusinessLogicError("No authenticated user context")
+
+            user_id = self.current_user.get("user_id")
+            if not user_id:
+                raise BusinessLogicError("Invalid user context")
+
+            return await self.get_user(user_id)
+
+        except BusinessLogicError:
+            raise
+        except Exception as e:
+            logger.error(f"Error in get_current_user_profile: {e}")
+            raise BusinessLogicError(f"Failed to get user profile: {str(e)}")
+
+    async def search_users(
+        self,
+        search_term: str,
+        limit: int = 10,
+        role_filter: Optional[str] = None
+    ) -> List[User]:
+        """
+        Search users by name or email.
         
         Args:
-            user_id: User UUID
-            activated_by: ID of user performing the activation
-            **kwargs: Additional parameters for future versions
+            search_term: Search term
+            limit: Maximum results
+            role_filter: Optional role filter
             
         Returns:
-            Activated user object
+            List[User]: Matching users
         """
         try:
-            # Business rule validation
-            await self._validate_user_status_change(user_id, activated_by)
-            
-            user = await self.service.activate_user(user_id)
-            return user
-            
-        except NotFoundError as e:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
-        except VetClinicException as e:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
-        except Exception as e:
-            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Internal server error")
+            if not search_term or len(search_term.strip()) < 2:
+                raise ValidationError(
+                    "Search term must be at least 2 characters long",
+                    field="search_term",
+                    value=search_term
+                )
 
-    async def deactivate_user(
-        self,
-        user_id: uuid.UUID,
-        deactivated_by: Optional[uuid.UUID] = None,
-        **kwargs
-    ) -> User:
+            # Validate role filter if provided
+            role_enum = None
+            if role_filter:
+                try:
+                    role_enum = UserRole(role_filter)
+                except ValueError:
+                    raise ValidationError(
+                        message="Invalid role filter",
+                        field="role_filter",
+                        value=role_filter
+                    )
+
+            # Delegate to service
+            users = await self.service.search_users(
+                search_term=search_term.strip(),
+                limit=min(limit, 50),  # Cap at 50 results
+                role_filter=role_enum
+            )
+
+            return users
+
+        except (ValidationError, BusinessLogicError):
+            raise
+        except Exception as e:
+            logger.error(f"Error in search_users: {e}")
+            raise BusinessLogicError(f"Failed to search users: {str(e)}")
+
+    async def update_last_login(self, user_id: str) -> None:
         """
-        Deactivate a user account.
+        Update user's last login timestamp.
         
         Args:
-            user_id: User UUID
-            deactivated_by: ID of user performing the deactivation
-            **kwargs: Additional parameters for future versions
-            
-        Returns:
-            Deactivated user object
+            user_id: User ID
         """
         try:
-            # Business rule validation
-            await self._validate_user_status_change(user_id, deactivated_by)
-            
-            user = await self.service.deactivate_user(user_id)
-            return user
-            
-        except NotFoundError as e:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
-        except VetClinicException as e:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+            await self.service.update_last_login(user_id)
         except Exception as e:
-            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Internal server error")
-
-    async def assign_role(
-        self,
-        user_id: uuid.UUID,
-        role: Union[UserRole, str],
-        assigned_by: uuid.UUID,
-        **kwargs
-    ) -> Dict[str, Any]:
-        """
-        Assign a role to a user.
-        
-        Args:
-            user_id: User UUID
-            role: Role to assign
-            assigned_by: ID of user assigning the role
-            **kwargs: Additional parameters for future versions
-            
-        Returns:
-            Success confirmation
-        """
-        try:
-            # Business rule validation
-            await self._validate_role_assignment(user_id, role, assigned_by)
-            
-            await self.service.assign_role(user_id, role, assigned_by)
-            
-            return {"success": True, "message": f"Role {role} assigned successfully"}
-            
-        except NotFoundError as e:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
-        except ValidationError as e:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
-        except VetClinicException as e:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
-        except Exception as e:
-            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Internal server error")
-
-    async def remove_role(
-        self,
-        user_id: uuid.UUID,
-        role: Union[UserRole, str],
-        removed_by: uuid.UUID,
-        **kwargs
-    ) -> Dict[str, Any]:
-        """
-        Remove a role from a user.
-        
-        Args:
-            user_id: User UUID
-            role: Role to remove
-            removed_by: ID of user removing the role
-            **kwargs: Additional parameters for future versions
-            
-        Returns:
-            Success confirmation
-        """
-        try:
-            # Business rule validation
-            await self._validate_role_removal(user_id, role, removed_by)
-            
-            await self.service.remove_role(user_id, role, removed_by)
-            
-            return {"success": True, "message": f"Role {role} removed successfully"}
-            
-        except NotFoundError as e:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
-        except ValidationError as e:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
-        except VetClinicException as e:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
-        except Exception as e:
-            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Internal server error")
-
-    # Private helper methods for business rule validation
-
-    async def _validate_user_creation(
-        self,
-        data: Dict[str, Any],
-        created_by: Optional[uuid.UUID]
-    ) -> None:
-        """Validate business rules for user creation."""
-        # Validate required fields
-        required_fields = ["email", "first_name", "last_name"]
-        for field in required_fields:
-            if not data.get(field):
-                raise ValidationError(f"{field} is required")
-        
-        # Validate email format
-        email = data.get("email", "")
-        if "@" not in email or "." not in email:
-            raise ValidationError("Invalid email format")
-        
-        # Validate role if provided
-        role = data.get("role")
-        if role and isinstance(role, str):
-            try:
-                UserRole(role)
-            except ValueError:
-                raise ValidationError(f"Invalid role: {role}")
-
-    async def _validate_user_update(
-        self,
-        user_id: uuid.UUID,
-        data: Dict[str, Any],
-        updated_by: Optional[uuid.UUID]
-    ) -> None:
-        """Validate business rules for user updates."""
-        # Validate email format if provided
-        email = data.get("email")
-        if email and ("@" not in email or "." not in email):
-            raise ValidationError("Invalid email format")
-        
-        # Additional business rules can be added here
-        pass
-
-    async def _validate_user_deletion(
-        self,
-        user_id: uuid.UUID,
-        deleted_by: Optional[uuid.UUID]
-    ) -> None:
-        """Validate business rules for user deletion."""
-        # Check if user exists
-        await self.service.get_user_by_id(user_id)
-        
-        # Prevent self-deletion
-        if deleted_by and user_id == deleted_by:
-            raise ValidationError("Users cannot delete themselves")
-        
-        # Additional business rules can be added here
-        pass
-
-    async def _validate_user_status_change(
-        self,
-        user_id: uuid.UUID,
-        changed_by: Optional[uuid.UUID]
-    ) -> None:
-        """Validate business rules for user status changes."""
-        # Check if user exists
-        await self.service.get_user_by_id(user_id)
-        
-        # Prevent self status changes in some cases
-        if changed_by and user_id == changed_by:
-            raise ValidationError("Users cannot change their own status")
-        
-        # Additional business rules can be added here
-        pass
-
-    async def _validate_role_assignment(
-        self,
-        user_id: uuid.UUID,
-        role: Union[UserRole, str],
-        assigned_by: uuid.UUID
-    ) -> None:
-        """Validate business rules for role assignment."""
-        # Check if user exists
-        await self.service.get_user_by_id(user_id)
-        
-        # Validate role
-        if isinstance(role, str):
-            try:
-                UserRole(role)
-            except ValueError:
-                raise ValidationError(f"Invalid role: {role}")
-        
-        # Additional authorization checks can be added here
-        pass
-
-    async def _validate_role_removal(
-        self,
-        user_id: uuid.UUID,
-        role: Union[UserRole, str],
-        removed_by: uuid.UUID
-    ) -> None:
-        """Validate business rules for role removal."""
-        # Check if user exists
-        await self.service.get_user_by_id(user_id)
-        
-        # Validate role
-        if isinstance(role, str):
-            try:
-                UserRole(role)
-            except ValueError:
-                raise ValidationError(f"Invalid role: {role}")
-        
-        # Additional authorization checks can be added here
-        pass
+            logger.error(f"Error updating last login: {e}")
+            # Don't raise exception for login timestamp updates

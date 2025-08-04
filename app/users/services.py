@@ -1,20 +1,19 @@
 """
-Version-agnostic User Service
-
-This service handles data access and core business logic for user-related
-operations across all API versions. It supports dynamic parameters to
-accommodate different API version requirements.
+Version-agnostic User service for data access and core business logic.
+Handles all database operations and business rules for users across all API versions.
 """
 
 from typing import List, Tuple, Optional, Dict, Any, Union
-from datetime import datetime
-import uuid
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, and_, or_, insert, delete
+from sqlalchemy import select, func, and_, or_, update, delete
 from sqlalchemy.orm import selectinload
+from datetime import datetime
+import logging
 
-from app.models.user import User, UserRole, user_roles
-from app.core.exceptions import VetClinicException, NotFoundError, ValidationError
+from app.models.user import User, UserRole
+from app.core.exceptions import NotFoundError, ConflictError, ValidationError, handle_database_error
+
+logger = logging.getLogger(__name__)
 
 
 class UserService:
@@ -25,40 +24,41 @@ class UserService:
 
     async def list_users(
         self,
-        page: int = 1,
-        per_page: int = 10,
+        page: int,
+        size: int,
         search: Optional[str] = None,
         role: Optional[Union[UserRole, str]] = None,
+        department: Optional[str] = None,  # V2 feature
+        timezone: Optional[str] = None,    # V3 feature
+        language: Optional[str] = None,    # V3 feature
         is_active: Optional[bool] = None,
-        department: Optional[str] = None,  # V2 parameter
-        include_roles: bool = False,  # V2 parameter
-        **kwargs
+        **kwargs  # Handle additional filters from future versions
     ) -> Tuple[List[User], int]:
         """
-        List users with pagination and filtering.
-        Supports dynamic parameters for different API versions.
+        Retrieve users with filtering and pagination for all API versions.
         
         Args:
             page: Page number (1-based)
-            per_page: Items per page
-            search: Search term for name or email
-            role: Filter by user role (supports V1 and V2)
-            is_active: Filter by active status
-            department: Filter by department (V2 only)
-            include_roles: Include role information (V2 only)
-            **kwargs: Additional parameters for future versions
+            size: Page size
+            search: Search term for name/email
+            role: User role filter
+            department: Department filter (V2+)
+            timezone: Timezone filter (V3+)
+            language: Language filter (V3+)
+            is_active: Active status filter
+            **kwargs: Additional filters from future versions
             
         Returns:
-            Tuple of (users list, total count)
+            Tuple[List[User], int]: (users, total_count)
         """
         try:
             # Build base query
             query = select(User)
             count_query = select(func.count(User.id))
-            
-            # Apply filters
+
             conditions = []
-            
+
+            # Search filter
             if search:
                 search_term = f"%{search}%"
                 conditions.append(
@@ -68,379 +68,382 @@ class UserService:
                         User.email.ilike(search_term)
                     )
                 )
-            
+
+            # Role filter
             if role:
-                # Handle both string and enum role filtering
                 if isinstance(role, str):
                     try:
                         role = UserRole(role)
                     except ValueError:
-                        raise ValidationError(f"Invalid role: {role}")
+                        logger.warning(f"Invalid role filter: {role}")
+                        role = None
                 
-                # Join with user_roles table for role filtering
-                query = query.join(user_roles).where(user_roles.c.role == role)
-                count_query = count_query.join(user_roles).where(user_roles.c.role == role)
-            
+                if role:
+                    conditions.append(User.role == role)
+
+            # Department filter (V2+)
+            if department and hasattr(User, 'department'):
+                conditions.append(User.department == department)
+
+            # Timezone filter (V3+)
+            if timezone and hasattr(User, 'timezone'):
+                conditions.append(User.timezone == timezone)
+
+            # Language filter (V3+)
+            if language and hasattr(User, 'language'):
+                conditions.append(User.language == language)
+
+            # Active status filter
             if is_active is not None:
                 conditions.append(User.is_active == is_active)
-            
-            # V2 specific filters
-            if department and 'department' in kwargs:
-                # Placeholder for department filtering - would need department field in model
-                pass
-            
+
+            # Future version filters handled automatically
+            for field, value in kwargs.items():
+                if value is not None and hasattr(User, field):
+                    conditions.append(getattr(User, field) == value)
+
+            # Apply conditions
             if conditions:
                 query = query.where(and_(*conditions))
                 count_query = count_query.where(and_(*conditions))
-            
-            # Add role information if requested (V2)
-            # Note: Role information is handled through the user_roles association table
-            # and would need to be loaded separately if needed
-            
+
             # Get total count
             total_result = await self.db.execute(count_query)
-            total = total_result.scalar() or 0
-            
-            # Apply pagination
-            offset = (page - 1) * per_page
-            query = query.offset(offset).limit(per_page).order_by(User.created_at.desc())
+            total = total_result.scalar()
+
+            # Apply pagination and ordering
+            offset = (page - 1) * size
+            query = query.order_by(User.created_at.desc()).offset(offset).limit(size)
             
             # Execute query
             result = await self.db.execute(query)
             users = result.scalars().all()
-            
-            return list(users), total
-            
-        except Exception as e:
-            if isinstance(e, VetClinicException):
-                raise
-            raise VetClinicException(f"Failed to list users: {str(e)}")
 
-    async def get_user_by_id(
-        self,
-        user_id: uuid.UUID,
-        include_roles: bool = False,
-        include_relationships: bool = False,
-        **kwargs
-    ) -> User:
-        """
-        Get user by ID with optional related data.
-        
-        Args:
-            user_id: User UUID
-            include_roles: Include role information (V2)
-            include_relationships: Include pet/appointment relationships (V2)
-            **kwargs: Additional parameters for future versions
-            
-        Returns:
-            User object
-            
-        Raises:
-            NotFoundError: If user not found
-        """
-        try:
-            query = select(User).where(User.id == user_id)
-            
-            # Add optional relationships based on version needs
-            if include_roles:
-                query = query.options(selectinload(User.roles))
-            
-            if include_relationships:
-                query = query.options(
-                    selectinload(User.pets),
-                    selectinload(User.appointments)
-                )
-            
-            result = await self.db.execute(query)
-            user = result.scalar_one_or_none()
-            
-            if not user:
-                raise NotFoundError(f"User with id {user_id} not found")
-            
-            return user
-            
+            return list(users), total
+
         except Exception as e:
-            if isinstance(e, VetClinicException):
-                raise
-            raise VetClinicException(f"Failed to get user by id: {str(e)}")
+            logger.error(f"Error listing users: {e}")
+            raise handle_database_error(e)
 
     async def create_user(
         self,
         email: str,
         first_name: str,
         last_name: str,
+        clerk_id: str,
         phone_number: Optional[str] = None,
         role: Optional[Union[UserRole, str]] = UserRole.PET_OWNER,
-        clerk_id: Optional[str] = None,
-        bio: Optional[str] = None,
-        profile_image_url: Optional[str] = None,
-        department: Optional[str] = None,  # V2 parameter
-        preferences: Optional[Dict[str, Any]] = None,  # V2 parameter
-        **kwargs
+        **kwargs  # Handle version-specific fields
     ) -> User:
         """
-        Create a new user.
-        Supports dynamic parameters for different API versions.
+        Create a new user entity with support for all API versions.
         
         Args:
-            email: User email
+            email: User email address
             first_name: User first name
             last_name: User last name
-            phone_number: Optional phone number
-            role: User role (V1 and V2)
             clerk_id: Clerk user ID
-            bio: User biography (V2)
-            profile_image_url: Profile image URL (V2)
-            department: User department (V2)
-            preferences: User preferences (V2)
-            **kwargs: Additional parameters for future versions
+            phone_number: Optional phone number
+            role: User role
+            **kwargs: Additional fields from different API versions
             
         Returns:
-            Created user object
-            
-        Raises:
-            ValidationError: If email already exists or validation fails
+            User: Created user entity
         """
         try:
-            # Validate email uniqueness
-            existing_user = await self.get_user_by_email(email)
-            if existing_user:
-                raise ValidationError("Email already registered")
+            # Normalize email
+            email = email.lower().strip()
             
-            # Handle role parameter
+            # Handle role conversion
             if isinstance(role, str):
                 try:
                     role = UserRole(role)
                 except ValueError:
-                    raise ValidationError(f"Invalid role: {role}")
-            
-            # Create user data
+                    role = UserRole.PET_OWNER
+
+            # Prepare user data
             user_data = {
-                "email": email.lower().strip(),
+                "email": email,
                 "first_name": first_name.strip(),
                 "last_name": last_name.strip(),
-                "phone_number": phone_number.strip() if phone_number else None,
-                "clerk_id": clerk_id or f"temp_{uuid.uuid4()}",  # TODO: Integrate with Clerk
+                "clerk_id": clerk_id,
+                "phone_number": phone_number,
+                "role": role,
             }
-            
-            # Add optional V2 parameters
-            if bio:
-                user_data["bio"] = bio.strip()
-            if profile_image_url:
-                user_data["profile_image_url"] = profile_image_url
-            
-            # Create new user
+
+            # Add any additional fields that exist in the model
+            for field, value in kwargs.items():
+                if hasattr(User, field) and value is not None:
+                    user_data[field] = value
+
+            # Create user
             new_user = User(**user_data)
-            
             self.db.add(new_user)
             await self.db.commit()
             await self.db.refresh(new_user)
-            
-            # Assign role
-            if role:
-                await self.assign_role(new_user.id, role, new_user.id)
-            
+
+            logger.info(f"Created user: {new_user.id} ({new_user.email})")
             return new_user
-            
+
         except Exception as e:
             await self.db.rollback()
-            if isinstance(e, VetClinicException):
-                raise
-            raise VetClinicException(f"Failed to create user: {str(e)}")
+            logger.error(f"Error creating user: {e}")
+            raise handle_database_error(e)
 
-    async def update_user(
-        self,
-        user_id: uuid.UUID,
-        email: Optional[str] = None,
-        first_name: Optional[str] = None,
-        last_name: Optional[str] = None,
-        phone_number: Optional[str] = None,
-        bio: Optional[str] = None,
-        profile_image_url: Optional[str] = None,
-        is_active: Optional[bool] = None,
-        department: Optional[str] = None,  # V2 parameter
-        preferences: Optional[Dict[str, Any]] = None,  # V2 parameter
-        **kwargs
-    ) -> User:
+    async def get_user_by_id(self, user_id: str) -> Optional[User]:
         """
-        Update user information.
-        Supports dynamic parameters for different API versions.
+        Get user by ID.
         
         Args:
-            user_id: User UUID
-            email: New email address
-            first_name: New first name
-            last_name: New last name
-            phone_number: New phone number
-            bio: New biography (V2)
-            profile_image_url: New profile image URL (V2)
-            is_active: New active status
-            department: New department (V2)
-            preferences: New preferences (V2)
-            **kwargs: Additional parameters for future versions
+            user_id: User ID
             
         Returns:
-            Updated user object
+            Optional[User]: User entity or None if not found
         """
         try:
-            user = await self.get_user_by_id(user_id)
-            
-            # Update fields if provided
-            update_data = {}
-            if email is not None:
-                # Check email uniqueness if changing
-                if email.lower() != user.email:
-                    existing_user = await self.get_user_by_email(email)
-                    if existing_user:
-                        raise ValidationError("Email already registered")
-                update_data["email"] = email.lower().strip()
-            
-            if first_name is not None:
-                update_data["first_name"] = first_name.strip()
-            if last_name is not None:
-                update_data["last_name"] = last_name.strip()
-            if phone_number is not None:
-                update_data["phone_number"] = phone_number.strip() if phone_number else None
-            if bio is not None:
-                update_data["bio"] = bio.strip() if bio else None
-            if profile_image_url is not None:
-                update_data["profile_image_url"] = profile_image_url
-            if is_active is not None:
-                update_data["is_active"] = is_active
-            
-            # Apply updates
-            for field, value in update_data.items():
-                setattr(user, field, value)
-            
-            await self.db.commit()
-            await self.db.refresh(user)
-            
-            return user
-            
+            result = await self.db.execute(
+                select(User).where(User.id == user_id)
+            )
+            return result.scalar_one_or_none()
         except Exception as e:
-            await self.db.rollback()
-            if isinstance(e, VetClinicException):
-                raise
-            raise VetClinicException(f"Failed to update user: {str(e)}")
+            logger.error(f"Error getting user by ID {user_id}: {e}")
+            raise handle_database_error(e)
 
     async def get_user_by_email(self, email: str) -> Optional[User]:
         """
         Get user by email address.
         
         Args:
-            email: User email
+            email: User email address
             
         Returns:
-            User object or None if not found
+            Optional[User]: User entity or None if not found
         """
         try:
-            query = select(User).where(User.email == email.lower().strip())
-            result = await self.db.execute(query)
+            email = email.lower().strip()
+            result = await self.db.execute(
+                select(User).where(User.email == email)
+            )
             return result.scalar_one_or_none()
         except Exception as e:
-            raise VetClinicException(f"Failed to get user by email: {str(e)}")
+            logger.error(f"Error getting user by email {email}: {e}")
+            raise handle_database_error(e)
 
-    async def assign_role(
-        self,
-        user_id: uuid.UUID,
-        role: Union[UserRole, str],
-        assigned_by: uuid.UUID
-    ) -> None:
+    async def get_user_by_clerk_id(self, clerk_id: str) -> Optional[User]:
         """
-        Assign a role to a user.
+        Get user by Clerk ID.
         
         Args:
-            user_id: User UUID
-            role: Role to assign
-            assigned_by: ID of user assigning the role
+            clerk_id: Clerk user ID
+            
+        Returns:
+            Optional[User]: User entity or None if not found
         """
         try:
-            if isinstance(role, str):
-                role = UserRole(role)
-            
-            # Check if role already assigned
-            existing_query = select(user_roles).where(
-                and_(
-                    user_roles.c.user_id == user_id,
-                    user_roles.c.role == role
-                )
+            result = await self.db.execute(
+                select(User).where(User.clerk_id == clerk_id)
             )
-            result = await self.db.execute(existing_query)
-            if result.first():
-                return  # Role already assigned
-            
-            # Insert new role assignment
-            insert_stmt = insert(user_roles).values(
-                user_id=user_id,
-                role=role,
-                assigned_by=assigned_by
-            )
-            await self.db.execute(insert_stmt)
-            await self.db.commit()
-            
+            return result.scalar_one_or_none()
         except Exception as e:
-            await self.db.rollback()
-            raise VetClinicException(f"Failed to assign role: {str(e)}")
+            logger.error(f"Error getting user by Clerk ID {clerk_id}: {e}")
+            raise handle_database_error(e)
 
-    async def remove_role(
-        self,
-        user_id: uuid.UUID,
-        role: Union[UserRole, str],
-        removed_by: uuid.UUID
-    ) -> None:
+    async def update_user(self, user_id: str, **update_data) -> User:
         """
-        Remove a role from a user.
+        Update user with support for all API versions.
         
         Args:
-            user_id: User UUID
-            role: Role to remove
-            removed_by: ID of user removing the role
+            user_id: User ID to update
+            **update_data: Fields to update
+            
+        Returns:
+            User: Updated user entity
+            
+        Raises:
+            NotFoundError: If user not found
         """
         try:
-            if isinstance(role, str):
-                role = UserRole(role)
-            
-            delete_stmt = delete(user_roles).where(
-                and_(
-                    user_roles.c.user_id == user_id,
-                    user_roles.c.role == role
-                )
-            )
-            await self.db.execute(delete_stmt)
-            await self.db.commit()
-            
-        except Exception as e:
-            await self.db.rollback()
-            raise VetClinicException(f"Failed to remove role: {str(e)}")
-
-    async def delete_user(self, user_id: uuid.UUID) -> None:
-        """
-        Hard delete a user and related data.
-        
-        Args:
-            user_id: User UUID
-        """
-        try:
+            # Get existing user
             user = await self.get_user_by_id(user_id)
-            
-            # Delete role assignments first
-            delete_roles_stmt = delete(user_roles).where(user_roles.c.user_id == user_id)
-            await self.db.execute(delete_roles_stmt)
-            
-            # Delete user
-            await self.db.delete(user)
-            await self.db.commit()
-            
+            if not user:
+                raise NotFoundError(
+                    message=f"User with ID {user_id} not found",
+                    resource_type="User",
+                    resource_id=user_id
+                )
+
+            # Prepare update data
+            valid_update_data = {}
+            for field, value in update_data.items():
+                if hasattr(User, field) and value is not None:
+                    # Handle special field processing
+                    if field == "email":
+                        value = value.lower().strip()
+                    elif field == "role" and isinstance(value, str):
+                        try:
+                            value = UserRole(value)
+                        except ValueError:
+                            continue  # Skip invalid role values
+                    
+                    valid_update_data[field] = value
+
+            # Update user
+            if valid_update_data:
+                valid_update_data["updated_at"] = datetime.utcnow()
+                
+                await self.db.execute(
+                    update(User)
+                    .where(User.id == user_id)
+                    .values(**valid_update_data)
+                )
+                await self.db.commit()
+                
+                # Refresh user data
+                await self.db.refresh(user)
+
+            logger.info(f"Updated user: {user_id}")
+            return user
+
+        except NotFoundError:
+            raise
         except Exception as e:
             await self.db.rollback()
-            if isinstance(e, VetClinicException):
-                raise
-            raise VetClinicException(f"Failed to delete user: {str(e)}")
+            logger.error(f"Error updating user {user_id}: {e}")
+            raise handle_database_error(e)
 
-    async def activate_user(self, user_id: uuid.UUID) -> User:
-        """Activate a user account."""
-        return await self.update_user(user_id, is_active=True)
+    async def delete_user(self, user_id: str) -> bool:
+        """
+        Soft delete user (set is_active to False).
+        
+        Args:
+            user_id: User ID to delete
+            
+        Returns:
+            bool: True if user was deleted
+            
+        Raises:
+            NotFoundError: If user not found
+        """
+        try:
+            # Check if user exists
+            user = await self.get_user_by_id(user_id)
+            if not user:
+                raise NotFoundError(
+                    message=f"User with ID {user_id} not found",
+                    resource_type="User",
+                    resource_id=user_id
+                )
 
-    async def deactivate_user(self, user_id: uuid.UUID) -> User:
-        """Deactivate a user account."""
-        return await self.update_user(user_id, is_active=False)
+            # Soft delete (set inactive)
+            await self.db.execute(
+                update(User)
+                .where(User.id == user_id)
+                .values(is_active=False, updated_at=datetime.utcnow())
+            )
+            await self.db.commit()
+
+            logger.info(f"Soft deleted user: {user_id}")
+            return True
+
+        except NotFoundError:
+            raise
+        except Exception as e:
+            await self.db.rollback()
+            logger.error(f"Error deleting user {user_id}: {e}")
+            raise handle_database_error(e)
+
+    async def update_last_login(self, user_id: str) -> None:
+        """
+        Update user's last login timestamp.
+        
+        Args:
+            user_id: User ID
+        """
+        try:
+            await self.db.execute(
+                update(User)
+                .where(User.id == user_id)
+                .values(last_login=datetime.utcnow())
+            )
+            await self.db.commit()
+        except Exception as e:
+            logger.error(f"Error updating last login for user {user_id}: {e}")
+            # Don't raise exception for login timestamp updates
+
+    async def get_users_by_role(self, role: Union[UserRole, str]) -> List[User]:
+        """
+        Get all users with specific role.
+        
+        Args:
+            role: User role to filter by
+            
+        Returns:
+            List[User]: Users with the specified role
+        """
+        try:
+            if isinstance(role, str):
+                try:
+                    role = UserRole(role)
+                except ValueError:
+                    return []
+
+            result = await self.db.execute(
+                select(User)
+                .where(and_(User.role == role, User.is_active == True))
+                .order_by(User.created_at.desc())
+            )
+            return list(result.scalars().all())
+
+        except Exception as e:
+            logger.error(f"Error getting users by role {role}: {e}")
+            raise handle_database_error(e)
+
+    async def search_users(
+        self,
+        search_term: str,
+        limit: int = 10,
+        role_filter: Optional[Union[UserRole, str]] = None
+    ) -> List[User]:
+        """
+        Search users by name or email.
+        
+        Args:
+            search_term: Search term
+            limit: Maximum number of results
+            role_filter: Optional role filter
+            
+        Returns:
+            List[User]: Matching users
+        """
+        try:
+            search_pattern = f"%{search_term}%"
+            conditions = [
+                User.is_active == True,
+                or_(
+                    User.first_name.ilike(search_pattern),
+                    User.last_name.ilike(search_pattern),
+                    User.email.ilike(search_pattern)
+                )
+            ]
+
+            if role_filter:
+                if isinstance(role_filter, str):
+                    try:
+                        role_filter = UserRole(role_filter)
+                    except ValueError:
+                        role_filter = None
+                
+                if role_filter:
+                    conditions.append(User.role == role_filter)
+
+            result = await self.db.execute(
+                select(User)
+                .where(and_(*conditions))
+                .order_by(User.first_name, User.last_name)
+                .limit(limit)
+            )
+            return list(result.scalars().all())
+
+        except Exception as e:
+            logger.error(f"Error searching users: {e}")
+            raise handle_database_error(e)

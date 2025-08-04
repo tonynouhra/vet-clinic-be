@@ -1,6 +1,8 @@
 """
-Alembic environment configuration.
+Alembic environment configuration for Veterinary Clinic Backend.
+Handles database migrations with async SQLAlchemy support.
 """
+
 import asyncio
 from logging.config import fileConfig
 from sqlalchemy import pool
@@ -8,17 +10,10 @@ from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
 from alembic import context
 
-# Import your models here
+# Import your models here so Alembic can detect them
 from app.core.database import Base
-from app.core.config import settings
-
-# Import all models to ensure they are registered with Base metadata
-from app.models import (
-    User, UserSession, Pet, HealthRecord, Reminder,
-    Clinic, ClinicOperatingHours, Veterinarian, VeterinarianAvailability,
-    ClinicReview, VeterinarianReview, Appointment, AppointmentSlot,
-    Conversation, Message, MessageReaction, ChatBot, NotificationPreference
-)
+from app.models import user, pet, appointment, clinic, communication
+from app.core.config import get_settings
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
@@ -33,15 +28,11 @@ if config.config_file_name is not None:
 # for 'autogenerate' support
 target_metadata = Base.metadata
 
-# other values from the config, defined by the needs of env.py,
-# can be acquired:
-# my_important_option = config.get_main_option("my_important_option")
-# ... etc.
+# Get settings
+settings = get_settings()
 
-
-def get_url():
-    """Get database URL from settings."""
-    return settings.DATABASE_URL
+# Override sqlalchemy.url with our DATABASE_URL
+config.set_main_option("sqlalchemy.url", settings.DATABASE_URL)
 
 
 def run_migrations_offline() -> None:
@@ -56,7 +47,7 @@ def run_migrations_offline() -> None:
     script output.
 
     """
-    url = get_url()
+    url = config.get_main_option("sqlalchemy.url")
     context.configure(
         url=url,
         target_metadata=target_metadata,
@@ -81,10 +72,8 @@ async def run_async_migrations() -> None:
 
     """
 
-    configuration = config.get_section(config.config_ini_section)
-    configuration["sqlalchemy.url"] = get_url()
     connectable = async_engine_from_config(
-        configuration,
+        config.get_section(config.config_ini_section, {}),
         prefix="sqlalchemy.",
         poolclass=pool.NullPool,
     )

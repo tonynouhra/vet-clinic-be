@@ -1,287 +1,301 @@
 """
-Custom exception classes and error handling utilities for the application.
-
-This module provides a comprehensive exception hierarchy and utilities for
-consistent error handling across all API versions.
+Custom exception classes and error handling for the Veterinary Clinic Backend.
+Provides consistent error responses across all API versions.
 """
-from typing import Any, Dict, Optional, List
+
+from typing import Any, Dict, Optional, Union
 from fastapi import HTTPException, status
-from datetime import datetime
-import uuid
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class VetClinicException(Exception):
-    """Base exception class for the application."""
+    """Base exception for veterinary clinic application."""
     
     def __init__(
         self,
         message: str,
-        code: str = "INTERNAL_ERROR",
-        details: Optional[Dict[str, Any]] = None
+        error_code: str = "INTERNAL_ERROR",
+        details: Optional[Dict[str, Any]] = None,
+        status_code: int = status.HTTP_500_INTERNAL_SERVER_ERROR
     ):
         self.message = message
-        self.code = code
+        self.error_code = error_code
         self.details = details or {}
+        self.status_code = status_code
         super().__init__(self.message)
 
 
 class ValidationError(VetClinicException):
-    """Raised when validation fails."""
+    """Data validation errors."""
     
-    def __init__(self, message: str, details: Optional[Dict[str, Any]] = None):
-        super().__init__(message, "VALIDATION_ERROR", details)
+    def __init__(
+        self,
+        message: str = "Validation failed",
+        field: Optional[str] = None,
+        value: Optional[Any] = None,
+        details: Optional[Dict[str, Any]] = None
+    ):
+        error_details = details or {}
+        if field:
+            error_details["field"] = field
+        if value is not None:
+            error_details["value"] = str(value)
+            
+        super().__init__(
+            message=message,
+            error_code="VALIDATION_ERROR",
+            details=error_details,
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY
+        )
 
 
 class AuthenticationError(VetClinicException):
-    """Raised when authentication fails."""
+    """Authentication and authorization errors."""
     
-    def __init__(self, message: str = "Authentication failed"):
-        super().__init__(message, "AUTHENTICATION_ERROR")
+    def __init__(
+        self,
+        message: str = "Authentication failed",
+        details: Optional[Dict[str, Any]] = None
+    ):
+        super().__init__(
+            message=message,
+            error_code="AUTHENTICATION_ERROR",
+            details=details,
+            status_code=status.HTTP_401_UNAUTHORIZED
+        )
 
 
 class AuthorizationError(VetClinicException):
-    """Raised when authorization fails."""
+    """Authorization and permission errors."""
     
-    def __init__(self, message: str = "Insufficient permissions"):
-        super().__init__(message, "AUTHORIZATION_ERROR")
+    def __init__(
+        self,
+        message: str = "Access denied",
+        required_role: Optional[str] = None,
+        details: Optional[Dict[str, Any]] = None
+    ):
+        error_details = details or {}
+        if required_role:
+            error_details["required_role"] = required_role
+            
+        super().__init__(
+            message=message,
+            error_code="AUTHORIZATION_ERROR",
+            details=error_details,
+            status_code=status.HTTP_403_FORBIDDEN
+        )
 
 
 class NotFoundError(VetClinicException):
-    """Raised when a resource is not found."""
+    """Resource not found errors."""
     
-    def __init__(self, message: str, resource: str = "Resource"):
-        super().__init__(message, "NOT_FOUND", {"resource": resource})
-
-
-class ConflictError(VetClinicException):
-    """Raised when there's a conflict with existing data."""
-    
-    def __init__(self, message: str, details: Optional[Dict[str, Any]] = None):
-        super().__init__(message, "CONFLICT_ERROR", details)
+    def __init__(
+        self,
+        message: str = "Resource not found",
+        resource_type: Optional[str] = None,
+        resource_id: Optional[str] = None,
+        details: Optional[Dict[str, Any]] = None
+    ):
+        error_details = details or {}
+        if resource_type:
+            error_details["resource_type"] = resource_type
+        if resource_id:
+            error_details["resource_id"] = resource_id
+            
+        super().__init__(
+            message=message,
+            error_code="NOT_FOUND",
+            details=error_details,
+            status_code=status.HTTP_404_NOT_FOUND
+        )
 
 
 class BusinessLogicError(VetClinicException):
-    """Raised when business logic validation fails."""
+    """Business rule violations."""
     
-    def __init__(self, message: str, details: Optional[Dict[str, Any]] = None):
-        super().__init__(message, "BUSINESS_LOGIC_ERROR", details)
+    def __init__(
+        self,
+        message: str = "Business rule violation",
+        rule: Optional[str] = None,
+        details: Optional[Dict[str, Any]] = None
+    ):
+        error_details = details or {}
+        if rule:
+            error_details["rule"] = rule
+            
+        super().__init__(
+            message=message,
+            error_code="BUSINESS_LOGIC_ERROR",
+            details=error_details,
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY
+        )
 
 
-class DatabaseError(VetClinicException):
-    """Raised when database operations fail."""
+class ConflictError(VetClinicException):
+    """Resource conflict errors."""
     
-    def __init__(self, message: str, details: Optional[Dict[str, Any]] = None):
-        super().__init__(message, "DATABASE_ERROR", details)
-
-
-class ExternalServiceError(VetClinicException):
-    """Raised when external service calls fail."""
-    
-    def __init__(self, message: str, service: str, details: Optional[Dict[str, Any]] = None):
-        enhanced_details = {"service": service}
-        if details:
-            enhanced_details.update(details)
-        super().__init__(message, "EXTERNAL_SERVICE_ERROR", enhanced_details)
+    def __init__(
+        self,
+        message: str = "Resource conflict",
+        conflicting_resource: Optional[str] = None,
+        details: Optional[Dict[str, Any]] = None
+    ):
+        error_details = details or {}
+        if conflicting_resource:
+            error_details["conflicting_resource"] = conflicting_resource
+            
+        super().__init__(
+            message=message,
+            error_code="CONFLICT_ERROR",
+            details=error_details,
+            status_code=status.HTTP_409_CONFLICT
+        )
 
 
 class RateLimitError(VetClinicException):
-    """Raised when rate limits are exceeded."""
+    """Rate limiting errors."""
     
-    def __init__(self, message: str = "Rate limit exceeded", retry_after: Optional[int] = None):
-        details = {"retry_after": retry_after} if retry_after else {}
-        super().__init__(message, "RATE_LIMIT_ERROR", details)
+    def __init__(
+        self,
+        message: str = "Rate limit exceeded",
+        retry_after: Optional[int] = None,
+        details: Optional[Dict[str, Any]] = None
+    ):
+        error_details = details or {}
+        if retry_after:
+            error_details["retry_after"] = retry_after
+            
+        super().__init__(
+            message=message,
+            error_code="RATE_LIMIT_ERROR",
+            details=error_details,
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS
+        )
 
 
-# Error handling utilities for consistent responses across API versions
+class ExternalServiceError(VetClinicException):
+    """External service integration errors."""
+    
+    def __init__(
+        self,
+        message: str = "External service error",
+        service_name: Optional[str] = None,
+        details: Optional[Dict[str, Any]] = None
+    ):
+        error_details = details or {}
+        if service_name:
+            error_details["service_name"] = service_name
+            
+        super().__init__(
+            message=message,
+            error_code="EXTERNAL_SERVICE_ERROR",
+            details=error_details,
+            status_code=status.HTTP_502_BAD_GATEWAY
+        )
 
-def create_error_response(
+
+def create_http_exception(
     exception: VetClinicException,
-    version: str = "v1",
-    include_details: bool = True
-) -> Dict[str, Any]:
+    request_id: Optional[str] = None
+) -> HTTPException:
     """
-    Create a standardized error response from a VetClinicException.
-    
-    This utility ensures consistent error formatting across all API versions
-    while allowing version-specific customizations.
-    
-    Args:
-        exception: The VetClinicException to format
-        version: API version (affects response format)
-        include_details: Whether to include detailed error information
-        
-    Returns:
-        Dict: Formatted error response
-    """
-    base_response = {
-        "success": False,
-        "error": {
-            "code": exception.code,
-            "message": exception.message,
-            "timestamp": datetime.utcnow().isoformat() + "Z",
-            "request_id": str(uuid.uuid4())
-        }
-    }
-    
-    # Include details if requested and available
-    if include_details and exception.details:
-        base_response["error"]["details"] = exception.details
-    
-    # Version-specific formatting
-    if version == "v2":
-        # V2 might include additional metadata
-        base_response["meta"] = {
-            "api_version": version,
-            "error_type": exception.__class__.__name__
-        }
-    
-    return base_response
-
-
-def exception_to_http_exception(exception: VetClinicException) -> HTTPException:
-    """
-    Convert a VetClinicException to an appropriate HTTPException.
-    
-    This utility maps custom exceptions to appropriate HTTP status codes
-    for consistent API responses.
+    Convert VetClinicException to FastAPI HTTPException.
     
     Args:
         exception: The VetClinicException to convert
+        request_id: Optional request ID for tracking
         
     Returns:
-        HTTPException: FastAPI HTTPException with appropriate status code
+        HTTPException: FastAPI compatible exception
     """
-    status_code_mapping = {
-        "VALIDATION_ERROR": status.HTTP_422_UNPROCESSABLE_ENTITY,
-        "AUTHENTICATION_ERROR": status.HTTP_401_UNAUTHORIZED,
-        "AUTHORIZATION_ERROR": status.HTTP_403_FORBIDDEN,
-        "NOT_FOUND": status.HTTP_404_NOT_FOUND,
-        "CONFLICT_ERROR": status.HTTP_409_CONFLICT,
-        "BUSINESS_LOGIC_ERROR": status.HTTP_422_UNPROCESSABLE_ENTITY,
-        "DATABASE_ERROR": status.HTTP_500_INTERNAL_SERVER_ERROR,
-        "EXTERNAL_SERVICE_ERROR": status.HTTP_502_BAD_GATEWAY,
-        "RATE_LIMIT_ERROR": status.HTTP_429_TOO_MANY_REQUESTS,
-        "INTERNAL_ERROR": status.HTTP_500_INTERNAL_SERVER_ERROR,
+    error_detail = {
+        "error": {
+            "code": exception.error_code,
+            "message": exception.message,
+            "details": exception.details,
+        }
     }
     
-    status_code = status_code_mapping.get(exception.code, status.HTTP_500_INTERNAL_SERVER_ERROR)
+    if request_id:
+        error_detail["error"]["request_id"] = request_id
     
-    # Create error detail
-    detail = {
-        "code": exception.code,
-        "message": exception.message,
-        "timestamp": datetime.utcnow().isoformat() + "Z",
-        "request_id": str(uuid.uuid4())
-    }
-    
-    if exception.details:
-        detail["details"] = exception.details
-    
-    return HTTPException(status_code=status_code, detail=detail)
+    return HTTPException(
+        status_code=exception.status_code,
+        detail=error_detail
+    )
 
 
-def handle_service_exceptions(func):
+def handle_database_error(error: Exception) -> VetClinicException:
     """
-    Decorator to handle service layer exceptions and convert them to HTTP exceptions.
-    
-    This decorator can be applied to controller methods to automatically
-    convert service exceptions to appropriate HTTP responses.
+    Convert database errors to appropriate VetClinicException.
     
     Args:
-        func: The function to decorate
+        error: The database error to handle
         
     Returns:
-        Decorated function that handles exceptions
+        VetClinicException: Appropriate exception for the error
     """
-    async def wrapper(*args, **kwargs):
-        try:
-            return await func(*args, **kwargs)
-        except VetClinicException as e:
-            raise exception_to_http_exception(e)
-        except Exception as e:
-            # Handle unexpected exceptions
-            internal_error = VetClinicException(
-                message="An unexpected error occurred",
-                code="INTERNAL_ERROR",
-                details={"original_error": str(e)}
+    error_str = str(error).lower()
+    
+    # Handle common database errors
+    if "unique constraint" in error_str or "duplicate key" in error_str:
+        return ConflictError(
+            message="Resource already exists",
+            details={"database_error": str(error)}
+        )
+    elif "foreign key constraint" in error_str:
+        return ValidationError(
+            message="Invalid reference to related resource",
+            details={"database_error": str(error)}
+        )
+    elif "not null constraint" in error_str:
+        return ValidationError(
+            message="Required field is missing",
+            details={"database_error": str(error)}
+        )
+    elif "check constraint" in error_str:
+        return ValidationError(
+            message="Data validation failed",
+            details={"database_error": str(error)}
+        )
+    else:
+        # Generic database error
+        logger.error(f"Unhandled database error: {error}")
+        return VetClinicException(
+            message="Database operation failed",
+            error_code="DATABASE_ERROR",
+            details={"database_error": str(error)},
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+def handle_validation_error(error: Exception) -> ValidationError:
+    """
+    Convert Pydantic validation errors to ValidationError.
+    
+    Args:
+        error: The validation error to handle
+        
+    Returns:
+        ValidationError: Formatted validation error
+    """
+    if hasattr(error, 'errors'):
+        # Pydantic validation error
+        errors = error.errors()
+        if errors:
+            first_error = errors[0]
+            field = ".".join(str(loc) for loc in first_error.get('loc', []))
+            message = first_error.get('msg', 'Validation failed')
+            
+            return ValidationError(
+                message=message,
+                field=field,
+                details={"validation_errors": errors}
             )
-            raise exception_to_http_exception(internal_error)
     
-    return wrapper
-
-
-class ErrorContext:
-    """
-    Context manager for enhanced error handling with additional context.
-    
-    This can be used to add contextual information to exceptions
-    that occur within a specific operation.
-    """
-    
-    def __init__(self, operation: str, resource: Optional[str] = None):
-        self.operation = operation
-        self.resource = resource
-        self.context = {}
-    
-    def add_context(self, key: str, value: Any) -> None:
-        """Add contextual information."""
-        self.context[key] = value
-    
-    def __enter__(self):
-        return self
-    
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        if exc_type and issubclass(exc_type, VetClinicException):
-            # Enhance the exception with context
-            exc_val.details.update({
-                "operation": self.operation,
-                "resource": self.resource,
-                **self.context
-            })
-        return False  # Don't suppress the exception
-
-
-# Utility functions for common error scenarios
-
-def raise_not_found(resource_type: str, identifier: str) -> None:
-    """Raise a standardized not found error."""
-    raise NotFoundError(
-        message=f"{resource_type} not found",
-        resource=resource_type
-    )
-
-
-def raise_validation_error(field: str, message: str, value: Any = None) -> None:
-    """Raise a standardized validation error."""
-    details = {"field": field}
-    if value is not None:
-        details["value"] = value
-    
-    raise ValidationError(
-        message=f"Validation failed for {field}: {message}",
-        details=details
-    )
-
-
-def raise_business_logic_error(rule: str, message: str, context: Optional[Dict[str, Any]] = None) -> None:
-    """Raise a standardized business logic error."""
-    details = {"rule": rule}
-    if context:
-        details.update(context)
-    
-    raise BusinessLogicError(
-        message=message,
-        details=details
-    )
-
-
-def raise_conflict_error(resource_type: str, field: str, value: Any) -> None:
-    """Raise a standardized conflict error."""
-    raise ConflictError(
-        message=f"{resource_type} already exists with {field}: {value}",
-        details={
-            "resource_type": resource_type,
-            "conflicting_field": field,
-            "conflicting_value": value
-        }
+    return ValidationError(
+        message=str(error),
+        details={"validation_error": str(error)}
     )

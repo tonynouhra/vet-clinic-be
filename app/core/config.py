@@ -1,77 +1,96 @@
 """
-Application configuration settings using Pydantic Settings.
+Core configuration settings for the Veterinary Clinic Backend.
+Uses Pydantic Settings for environment variable management.
 """
-import os
-from typing import List, Optional
-from pydantic import Field, field_validator
+
 from pydantic_settings import BaseSettings
+from pydantic import Field, field_validator
+from typing import Optional, List
 
 
 class Settings(BaseSettings):
-    """Application settings."""
-
-    # Project information
-    PROJECT_NAME: str = "Veterinary Clinic Platform"
-    VERSION: str = "1.0.0"
-    API_V1_STR: str = "/api/v1"
-
-    # Environment (this comes from the loaded .env file)
-    ENVIRONMENT: str = Field(default="development", alias="ENVIRONMENT")
-    DEBUG: bool = Field(default=True, alias="DEBUG")
-
-    # Database configuration
-    DATABASE_URL: str = Field(..., alias="DATABASE_URL")
-    DATABASE_POOL_SIZE: int = Field(default=10, alias="DATABASE_POOL_SIZE")
-    DATABASE_MAX_OVERFLOW: int = Field(default=20, alias="DATABASE_MAX_OVERFLOW")
-
-    # Redis configuration
-    REDIS_URL: str = Field(default="redis://localhost:6379/0", alias="REDIS_URL")
-    REDIS_CACHE_TTL: int = Field(default=3600, alias="REDIS_CACHE_TTL")  # 1 hour
-
-    # Celery configuration
-    CELERY_BROKER_URL: str = Field(default="redis://localhost:6379/1", alias="CELERY_BROKER_URL")
-    CELERY_RESULT_BACKEND: str = Field(default="redis://localhost:6379/2", alias="CELERY_RESULT_BACKEND")
-
-    # Security
-    SECRET_KEY: str = Field(..., alias="SECRET_KEY")
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = Field(default=30, alias="ACCESS_TOKEN_EXPIRE_MINUTES")
-    REFRESH_TOKEN_EXPIRE_DAYS: int = Field(default=7, alias="REFRESH_TOKEN_EXPIRE_DAYS")
-
-    # CORS
-    BACKEND_CORS_ORIGINS: str = Field(
-        default="http://localhost:3000,http://localhost:5173",
-        alias="BACKEND_CORS_ORIGINS"
-    )
-
-    # Clerk Authentication
-    CLERK_SECRET_KEY: Optional[str] = Field(default=None, alias="CLERK_SECRET_KEY")
-    CLERK_PUBLISHABLE_KEY: Optional[str] = Field(default=None, alias="CLERK_PUBLISHABLE_KEY")
-
-    # File storage
-    SUPABASE_URL: Optional[str] = Field(default=None, alias="SUPABASE_URL")
-    SUPABASE_KEY: Optional[str] = Field(default=None, alias="SUPABASE_KEY")
-    SUPABASE_BUCKET: str = Field(default="vet-clinic-files", alias="SUPABASE_BUCKET")
-
-    # Email configuration
-    SMTP_HOST: Optional[str] = Field(default=None, alias="SMTP_HOST")
-    SMTP_PORT: int = Field(default=587, alias="SMTP_PORT")
-    SMTP_USERNAME: Optional[str] = Field(default=None, alias="SMTP_USERNAME")
-    SMTP_PASSWORD: Optional[str] = Field(default=None, alias="SMTP_PASSWORD")
-    SMTP_FROM_EMAIL: Optional[str] = Field(default=None, alias="SMTP_FROM_EMAIL")
-
-    @property
-    def cors_origins(self) -> List[str]:
-        """Get CORS origins as a list."""
-        if isinstance(self.BACKEND_CORS_ORIGINS, str):
-            return [i.strip() for i in self.BACKEND_CORS_ORIGINS.split(",") if i.strip()]
-        return []
-
+    """Application settings with environment variable support."""
+    
+    # Application Settings
+    APP_NAME: str = "Veterinary Clinic Backend"
+    APP_VERSION: str = "1.0.0"
+    DEBUG: bool
+    ENVIRONMENT: str
+    
+    # API Settings
+    API_V1_PREFIX: str = "/api/v1"
+    API_V2_PREFIX: str = "/api/v2"
+    
+    # Database Settings (Supabase PostgreSQL)
+    DATABASE_URL: str
+    DATABASE_POOL_SIZE: int
+    DATABASE_MAX_OVERFLOW: int
+    
+    # Redis Settings
+    REDIS_URL: str
+    
+    # Celery Settings
+    CELERY_BROKER_URL: str
+    CELERY_RESULT_BACKEND: str
+    
+    # Authentication Settings (Clerk)
+    CLERK_SECRET_KEY: str
+    CLERK_PUBLISHABLE_KEY: str
+    JWT_SECRET_KEY: str
+    JWT_ALGORITHM: str = "HS256"
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
+    
+    # File Storage Settings (Supabase Storage)
+    SUPABASE_STORAGE_ENDPOINT: str
+    SUPABASE_STORAGE_BUCKET: str
+    SUPABASE_ACCESS_KEY_ID: str
+    SUPABASE_SECRET_ACCESS_KEY: str
+    
+    # CORS Settings
+    ALLOWED_ORIGINS: List[str]
+    
+    # Rate Limiting
+    RATE_LIMIT_PER_MINUTE: int
+    
+    # Email Settings
+    SMTP_HOST: str
+    SMTP_PORT: int
+    SMTP_USERNAME: str
+    SMTP_PASSWORD: str
+    SMTP_USE_TLS: bool
+    
+    # Monitoring Settings
+    SENTRY_DSN: Optional[str] = None
+    LOG_LEVEL: str
+    
+    @field_validator("ENVIRONMENT")
+    @classmethod
+    def validate_environment(cls, v):
+        """Validate environment setting."""
+        allowed_environments = ["development", "staging", "production"]
+        if v not in allowed_environments:
+            raise ValueError(f"Environment must be one of: {allowed_environments}")
+        return v
+    
+    @field_validator("DATABASE_URL")
+    @classmethod
+    def validate_database_url(cls, v):
+        """Ensure database URL is provided."""
+        if not v:
+            raise ValueError("DATABASE_URL is required")
+        return v
+    
     model_config = {
-        "env_file": f".env.{os.getenv('ENVIRONMENT', 'development')}",
-        "case_sensitive": True,
-        "extra": "ignore"
+        "env_file": ".env",
+        "env_file_encoding": "utf-8",
+        "case_sensitive": True
     }
 
 
 # Global settings instance
 settings = Settings()
+
+
+def get_settings() -> Settings:
+    """Get application settings instance."""
+    return settings
