@@ -36,6 +36,8 @@ class Settings(BaseSettings):
     # Authentication Settings (Clerk)
     CLERK_SECRET_KEY: str
     CLERK_PUBLISHABLE_KEY: str
+    CLERK_WEBHOOK_SECRET: Optional[str] = None
+    CLERK_JWT_ISSUER: str = "https://clerk.dev"
     JWT_SECRET_KEY: str
     JWT_ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
@@ -78,6 +80,26 @@ class Settings(BaseSettings):
         """Ensure database URL is provided."""
         if not v:
             raise ValueError("DATABASE_URL is required")
+        return v
+    
+    @field_validator("CLERK_SECRET_KEY")
+    @classmethod
+    def validate_clerk_secret_key(cls, v):
+        """Validate Clerk secret key format."""
+        if not v:
+            raise ValueError("CLERK_SECRET_KEY is required")
+        if not v.startswith("sk_"):
+            raise ValueError("CLERK_SECRET_KEY must start with 'sk_'")
+        return v
+    
+    @field_validator("CLERK_PUBLISHABLE_KEY")
+    @classmethod
+    def validate_clerk_publishable_key(cls, v):
+        """Validate Clerk publishable key format."""
+        if not v:
+            raise ValueError("CLERK_PUBLISHABLE_KEY is required")
+        if not v.startswith("pk_"):
+            raise ValueError("CLERK_PUBLISHABLE_KEY must start with 'pk_'")
         return v
     
     model_config = {

@@ -28,8 +28,7 @@ engine = create_async_engine(
     pool_size=settings.DATABASE_POOL_SIZE,
     max_overflow=settings.DATABASE_MAX_OVERFLOW,
     pool_pre_ping=True,  # Validate connections before use
-    pool_recycle=3600,   # Recycle connections every hour
-    poolclass=NullPool if settings.ENVIRONMENT == "testing" else None,
+    pool_recycle=3600,  # Recycle connections every hour
 )
 
 # Async session factory
@@ -45,7 +44,7 @@ AsyncSessionLocal = async_sessionmaker(
 async def get_db() -> AsyncGenerator[AsyncSession, None]:
     """
     Dependency function to get database session.
-    
+
     Yields:
         AsyncSession: Database session for dependency injection
     """
@@ -67,14 +66,14 @@ async def init_db() -> None:
     In production, use Alembic migrations instead.
     """
     settings = get_settings()
-    
+
     # Only auto-create tables in development
     if settings.ENVIRONMENT == "development":
         try:
             async with engine.begin() as conn:
                 # Import all models to ensure they're registered
                 from app.models import user, pet, appointment, clinic, communication
-                
+
                 # Create all tables if they don't exist
                 await conn.run_sync(Base.metadata.create_all)
                 logger.info("Database tables created successfully (development mode)")
@@ -82,13 +81,15 @@ async def init_db() -> None:
             logger.error(f"Failed to initialize database: {e}")
             raise
     else:
-        logger.info(f"Skipping auto table creation in {settings.ENVIRONMENT} environment. Use Alembic migrations.")
+        logger.info(
+            f"Skipping auto table creation in {settings.ENVIRONMENT} environment. Use Alembic migrations."
+        )
 
 
 async def ensure_tables_exist() -> bool:
     """
     Check if required tables exist in the database.
-    
+
     Returns:
         bool: True if tables exist, False otherwise
     """
@@ -96,7 +97,9 @@ async def ensure_tables_exist() -> bool:
         async with AsyncSessionLocal() as session:
             # Try to query the users table as a basic check
             from app.models.user import User
-            await session.execute("SELECT 1 FROM users LIMIT 1")
+            from sqlalchemy import text
+
+            await session.execute(text("SELECT 1 FROM users LIMIT 1"))
             return True
     except Exception:
         return False
@@ -117,43 +120,51 @@ async def close_db() -> None:
 
 class DatabaseHealthCheck:
     """Database health check utility."""
-    
+
     @staticmethod
     async def check_connection() -> bool:
         """
         Check if database connection is healthy.
-        
+
         Returns:
             bool: True if connection is healthy, False otherwise
         """
         try:
             async with AsyncSessionLocal() as session:
-                await session.execute("SELECT 1")
+                from sqlalchemy import text
+
+                await session.execute(text("SELECT 1"))
                 return True
         except Exception as e:
             logger.error(f"Database health check failed: {e}")
             return False
-    
+
     @staticmethod
     async def get_connection_info() -> dict:
         """
         Get database connection information.
-        
+
         Returns:
             dict: Connection information and statistics
         """
         try:
             async with AsyncSessionLocal() as session:
-                result = await session.execute("""
+                from sqlalchemy import text
+
+                result = await session.execute(
+                    text(
+                        """
                     SELECT 
                         version() as version,
                         current_database() as database,
                         current_user as user,
                         inet_server_addr() as server_addr,
                         inet_server_port() as server_port
-                """)
+                """
+                    )
+                )
                 row = result.fetchone()
-                
+
                 return {
                     "status": "healthy",
                     "version": row.version if row else "unknown",
@@ -167,7 +178,4 @@ class DatabaseHealthCheck:
                 }
         except Exception as e:
             logger.error(f"Failed to get database connection info: {e}")
-            return {
-                "status": "unhealthy",
-                "error": str(e)
-            }
+            return {"status": "unhealthy", "error": str(e)}

@@ -33,6 +33,31 @@ async def lifespan(app: FastAPI):
     logger.info(f"Debug Mode: {settings.DEBUG}")
 
     try:
+        # Verify configuration on startup
+        logger.info("🔍 Verifying configuration...")
+        try:
+            from scripts.verify_config import ConfigVerifier
+            verifier = ConfigVerifier()
+            success, issues = verifier.verify_configuration()
+            
+            if not success:
+                logger.error("❌ Configuration verification failed!")
+                for key, field_issues in issues.items():
+                    if key in verifier.required_fields and verifier.required_fields[key]["critical"]:
+                        logger.error(f"   {key}: {', '.join(field_issues)}")
+                logger.error("🔧 Run 'python scripts/verify_config.py' for detailed information")
+                raise RuntimeError("Configuration verification failed")
+            else:
+                logger.info("✅ Configuration verified successfully")
+        except ImportError:
+            logger.warning("⚠️  Configuration verifier not available, skipping verification")
+        except Exception as e:
+            if settings.ENVIRONMENT == "development":
+                logger.warning(f"⚠️  Configuration verification failed: {e}")
+                logger.warning("🔧 Run 'python scripts/verify_config.py' to fix configuration issues")
+            else:
+                # In production, configuration issues should be fatal
+                raise
         # Initialize database (development only)
         if settings.ENVIRONMENT == "development":
             logger.info("🔧 Development mode: Checking database schema...")
@@ -180,9 +205,9 @@ async def root():
     }
 
 
-# TODO: Add API routes here
-# from app.api.v1 import users
-# app.include_router(users.router, prefix=settings.API_V1_PREFIX)
+# Add API routes
+from app.api import auth
+app.include_router(auth.router, prefix=settings.API_V1_PREFIX)
 
 
 if __name__ == "__main__":

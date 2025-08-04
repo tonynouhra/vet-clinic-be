@@ -33,18 +33,17 @@ print_error() {
     echo -e "${RED}[ERROR]${NC} $1"
 }
 
-# Check if .env file exists
-if [ ! -f ".env" ]; then
-    print_error ".env file not found!"
-    print_status "Creating .env file from .env.example..."
-    if [ -f ".env.example" ]; then
-        cp .env.example .env
-        print_warning "Please update .env file with your actual values"
-    else
-        print_error ".env.example not found. Please create .env file manually."
-        exit 1
-    fi
+# Run comprehensive startup checks
+print_status "Running startup verification checks..."
+python scripts/startup_check.py
+
+if [ $? -ne 0 ]; then
+    print_error "Startup checks failed!"
+    print_status "Please fix the issues above before starting"
+    exit 1
 fi
+
+print_success "All startup checks passed"
 
 # Check if virtual environment exists
 if [ ! -d "venv" ] && [ ! -d ".venv" ]; then
