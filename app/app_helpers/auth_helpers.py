@@ -4,7 +4,7 @@ Provides JWT token validation, user authentication, and role-based access contro
 """
 
 from typing import Dict, Any, Optional, Callable
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, status, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 import jwt
 from datetime import datetime, timedelta
@@ -12,21 +12,28 @@ import logging
 
 from app.core.config import get_settings
 from app.core.exceptions import AuthenticationError, AuthorizationError
+from app.core.logging_config import get_auth_logger
+from app.app_helpers.response_helpers import generate_request_id
 from app.services.clerk_service import get_clerk_service
 
 logger = logging.getLogger(__name__)
+auth_logger = get_auth_logger()
 settings = get_settings()
 
 # HTTP Bearer token scheme
 security = HTTPBearer()
 
 
-async def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)) -> Dict[str, Any]:
+async def verify_token(
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+    request: Request = None
+) -> Dict[str, Any]:
     """
     Verify JWT token using Clerk authentication and extract user information.
     
     Args:
         credentials: HTTP Bearer credentials from request
+        request: FastAPI request object for context
         
     Returns:
         Dict[str, Any]: Decoded token payload with user information
@@ -34,28 +41,58 @@ async def verify_token(credentials: HTTPAuthorizationCredentials = Depends(secur
     Raises:
         AuthenticationError: If token is invalid or expired
     """
+    request_id = generate_request_id()
+    ip_address = None
+    user_agent = None
+    
+    # Extract request context if available
+    if request:
+        ip_address = request.client.host if request.client else None
+        user_agent = request.headers.get("user-agent")
+    
     try:
         clerk_service = get_clerk_service()
         
         # Use Clerk service to verify JWT token with proper signature validation
-        token_data = await clerk_service.verify_jwt_token(credentials.credentials)
+        token_data = await clerk_service.verify_jwt_token(
+            credentials.credentials,
+            request_id=request_id
+        )
         
         # Return standardized user information
-        return {
+        result = {
             "user_id": token_data.get("user_id"),
             "clerk_id": token_data.get("clerk_id"),
             "email": token_data.get("email"),
             "role": token_data.get("role", "pet_owner"),
             "permissions": token_data.get("permissions", []),
             "exp": token_data.get("exp"),
-            "session_id": token_data.get("session_id")
+            "session_id": token_data.get("session_id"),
+            "request_id": request_id
         }
         
-    except AuthenticationError:
-        # Re-raise Clerk authentication errors as-is
+        return result
+        
+    except AuthenticationError as e:
+        # Log authentication failure with context
+        auth_logger.log_authentication_failure(
+            reason=str(e),
+            error_code=e.error_code,
+            request_id=request_id,
+            ip_address=ip_address,
+            user_agent=user_agent
+        )
         raise
     except Exception as e:
-        logger.error(f"Token verification error: {e}")
+        # Log unexpected error
+        auth_logger.log_authentication_failure(
+            reason="Unexpected token verification error",
+            error_code="TOKEN_VERIFICATION_ERROR",
+            request_id=request_id,
+            ip_address=ip_address,
+            user_agent=user_agent
+        )
+        logger.error(f"Token verification error: {e}", exc_info=True)
         raise AuthenticationError("Token verification failed")
 
 
@@ -96,10 +133,25 @@ def require_role(required_role: str) -> Callable:
         ):
             return await list_all_users()
     """
-    async def _require_role(current_user: Dict[str, Any] = Depends(get_current_user)) -> Dict[str, Any]:
+    async def _require_role(
+        current_user: Dict[str, Any] = Depends(get_current_user),
+        request: Request = None
+    ) -> Dict[str, Any]:
         user_role = current_user.get("role")
         
         if user_role != required_role:
+            # Log authorization failure
+            auth_logger.log_authorization_failure(
+                user_id=current_user.get("user_id"),
+                clerk_id=current_user.get("clerk_id"),
+                required_role=required_role,
+                user_role=user_role,
+                endpoint=request.url.path if request else None,
+                method=request.method if request else None,
+                request_id=current_user.get("request_id"),
+                ip_address=request.client.host if request and request.client else None
+            )
+            
             raise AuthorizationError(
                 message=f"Access denied. Required role: {required_role}",
                 required_role=required_role,

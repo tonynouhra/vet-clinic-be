@@ -14,8 +14,9 @@ from app.core.database import init_db, close_db, ensure_tables_exist
 from app.core.exceptions import VetClinicException, create_http_exception
 from app.app_helpers.response_helpers import error_response, generate_request_id
 
-# Setup logging
-logging.basicConfig(level=logging.INFO)
+# Setup enhanced logging
+from app.core.logging_config import setup_logging
+setup_logging()
 logger = logging.getLogger(__name__)
 
 settings = get_settings()
@@ -208,9 +209,11 @@ async def root():
 # Add API routes
 from app.api import auth
 from app.api.v1 import api_router as v1_router
+from app.api.webhooks import clerk as clerk_webhooks
 
 app.include_router(auth.router, prefix=settings.API_V1_PREFIX)
 app.include_router(v1_router, prefix=settings.API_V1_PREFIX)
+app.include_router(clerk_webhooks.router)  # Webhooks don't need API version prefix
 
 
 if __name__ == "__main__":

@@ -28,6 +28,9 @@ class Settings(BaseSettings):
     
     # Redis Settings
     REDIS_URL: str
+    REDIS_CACHE_TTL: int = 900  # 15 minutes default TTL
+    REDIS_USER_CACHE_TTL: int = 900  # 15 minutes for user data
+    REDIS_JWT_CACHE_TTL: int = 3600  # 1 hour for JWT validation results
     
     # Celery Settings
     CELERY_BROKER_URL: str
@@ -43,6 +46,13 @@ class Settings(BaseSettings):
     JWT_SECRET_KEY: str
     JWT_ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
+    
+    # Clerk Error Handling Configuration
+    CLERK_CIRCUIT_BREAKER_THRESHOLD: int = 5
+    CLERK_CIRCUIT_BREAKER_TIMEOUT: int = 60
+    CLERK_MAX_RETRIES: int = 3
+    CLERK_RETRY_BASE_DELAY: float = 1.0
+    CLERK_REQUEST_TIMEOUT: int = 30
     
     # File Storage Settings (Supabase Storage)
     SUPABASE_STORAGE_ENDPOINT: str

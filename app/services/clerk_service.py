@@ -12,10 +12,20 @@ from functools import lru_cache
 from cryptography.hazmat.primitives import serialization
 
 from app.core.config import get_settings
-from app.core.exceptions import AuthenticationError
+from app.core.exceptions import AuthenticationError, ExternalServiceError
+from app.core.error_handlers import (
+    with_error_handling, 
+    error_context, 
+    handle_clerk_api_error,
+    get_fallback_manager
+)
+from app.core.logging_config import get_auth_logger
+from app.services.auth_cache_service import get_auth_cache_service
 
 logger = logging.getLogger(__name__)
+auth_logger = get_auth_logger()
 settings = get_settings()
+fallback_manager = get_fallback_manager()
 
 
 class ClerkUser:
@@ -74,13 +84,17 @@ class ClerkService:
         )
         self._jwks_cache = {}
         self._jwks_cache_time = None
+        self.cache_service = get_auth_cache_service()
 
-    async def verify_jwt_token(self, token: str) -> Dict[str, Any]:
+    @with_error_handling("jwt_token_verification")
+    async def verify_jwt_token(self, token: str, request_id: Optional[str] = None) -> Dict[str, Any]:
         """
         Verify JWT token with Clerk and extract user information.
+        Uses Redis caching for performance optimization and enhanced error handling.
 
         Args:
             token: JWT token to verify
+            request_id: Request ID for tracking
 
         Returns:
             Dict containing user information from token
@@ -88,68 +102,191 @@ class ClerkService:
         Raises:
             AuthenticationError: If token is invalid or expired
         """
-        try:
-            # Get JWT header to find the key ID
-            unverified_header = jwt.get_unverified_header(token)
-            kid = unverified_header.get("kid")
+        async with error_context("jwt_token_verification", request_id=request_id):
+            try:
+                # Check cache first
+                cached_result = await self.cache_service.get_cached_jwt_validation(token)
+                if cached_result:
+                    logger.debug("Using cached JWT validation result")
+                    auth_logger.log_authentication_success(
+                        user_id=cached_result.get("user_id"),
+                        clerk_id=cached_result.get("clerk_id"),
+                        email=cached_result.get("email"),
+                        role=cached_result.get("role"),
+                        request_id=request_id
+                    )
+                    return cached_result
 
-            if not kid:
-                raise AuthenticationError("Token missing key ID")
+                # Get JWT header to find the key ID
+                try:
+                    unverified_header = jwt.get_unverified_header(token)
+                except jwt.DecodeError as e:
+                    auth_logger.log_token_validation_error(
+                        error_type="malformed_token",
+                        error_message="Token header cannot be decoded",
+                        request_id=request_id
+                    )
+                    raise AuthenticationError("Malformed token")
 
-            # Get public key for verification
-            public_key = await self._get_public_key(kid)
+                kid = unverified_header.get("kid")
+                if not kid:
+                    auth_logger.log_token_validation_error(
+                        error_type="missing_key_id",
+                        error_message="Token missing key ID",
+                        token_info={"header": unverified_header},
+                        request_id=request_id
+                    )
+                    raise AuthenticationError("Token missing key ID")
 
-            # Verify and decode token
-            payload = jwt.decode(
-                token,
-                public_key,
-                algorithms=["RS256"],
-                issuer=self.jwt_issuer,
-                options={"verify_aud": False},  # Clerk doesn't always include audience
-            )
+                # Get public key for verification with fallback
+                public_key = await fallback_manager.execute_with_fallback(
+                    primary_func=self._get_public_key,
+                    fallback_func=self._get_cached_public_key,
+                    operation_name="get_public_key",
+                    request_id=request_id,
+                    kid=kid
+                )
 
-            # Extract user information
-            user_id = payload.get("sub")
-            if not user_id:
-                raise AuthenticationError("Token missing user ID")
+                # Verify and decode token
+                try:
+                    payload = jwt.decode(
+                        token,
+                        public_key,
+                        algorithms=["RS256"],
+                        issuer=self.jwt_issuer,
+                        options={"verify_aud": False},  # Clerk doesn't always include audience
+                    )
+                except jwt.ExpiredSignatureError:
+                    auth_logger.log_token_validation_error(
+                        error_type="expired_token",
+                        error_message="Token has expired",
+                        request_id=request_id
+                    )
+                    raise AuthenticationError("Token has expired")
+                except jwt.InvalidSignatureError:
+                    auth_logger.log_token_validation_error(
+                        error_type="invalid_signature",
+                        error_message="Token signature is invalid",
+                        request_id=request_id
+                    )
+                    raise AuthenticationError("Invalid token signature")
+                except jwt.InvalidIssuerError:
+                    auth_logger.log_token_validation_error(
+                        error_type="invalid_issuer",
+                        error_message=f"Token issuer mismatch. Expected: {self.jwt_issuer}",
+                        request_id=request_id
+                    )
+                    raise AuthenticationError("Invalid token issuer")
+                except jwt.InvalidTokenError as e:
+                    auth_logger.log_token_validation_error(
+                        error_type="invalid_token",
+                        error_message=str(e),
+                        request_id=request_id
+                    )
+                    raise AuthenticationError("Invalid token")
 
-            return {
-                "user_id": user_id,
-                "clerk_id": user_id,
-                "email": payload.get("email"),
-                "role": payload.get("public_metadata", {}).get("role", "pet_owner"),
-                "permissions": payload.get("public_metadata", {}).get(
-                    "permissions", []
-                ),
-                "exp": payload.get("exp"),
-                "iat": payload.get("iat"),
-                "session_id": payload.get("sid"),
-            }
+                # Extract user information
+                user_id = payload.get("sub")
+                if not user_id:
+                    auth_logger.log_token_validation_error(
+                        error_type="missing_user_id",
+                        error_message="Token missing user ID",
+                        token_info={"payload_keys": list(payload.keys())},
+                        request_id=request_id
+                    )
+                    raise AuthenticationError("Token missing user ID")
 
-        except jwt.ExpiredSignatureError:
-            raise AuthenticationError("Token has expired")
-        except jwt.InvalidTokenError as e:
-            logger.warning(f"Invalid JWT token: {e}")
-            raise AuthenticationError("Invalid token")
-        except Exception as e:
-            logger.error(f"JWT verification error: {e}")
-            raise AuthenticationError("Token verification failed")
+                validation_result = {
+                    "user_id": user_id,
+                    "clerk_id": user_id,
+                    "email": payload.get("email"),
+                    "role": payload.get("public_metadata", {}).get("role", "pet_owner"),
+                    "permissions": payload.get("public_metadata", {}).get(
+                        "permissions", []
+                    ),
+                    "exp": payload.get("exp"),
+                    "iat": payload.get("iat"),
+                    "session_id": payload.get("sid"),
+                }
 
-    async def get_user_by_clerk_id(self, clerk_id: str) -> ClerkUser:
+                # Cache the validation result
+                await self.cache_service.cache_jwt_validation(token, validation_result)
+
+                # Log successful authentication
+                auth_logger.log_authentication_success(
+                    user_id=user_id,
+                    clerk_id=user_id,
+                    email=validation_result.get("email"),
+                    role=validation_result.get("role"),
+                    request_id=request_id
+                )
+
+                return validation_result
+
+            except AuthenticationError:
+                # Re-raise authentication errors as-is
+                raise
+            except Exception as e:
+                auth_logger.log_token_validation_error(
+                    error_type="unexpected_error",
+                    error_message=str(e),
+                    request_id=request_id
+                )
+                raise AuthenticationError("Token verification failed")
+
+    @with_error_handling("get_user_by_clerk_id")
+    async def get_user_by_clerk_id(self, clerk_id: str, request_id: Optional[str] = None) -> ClerkUser:
         """
         Get user information from Clerk API by user ID.
+        Uses Redis caching for performance optimization and enhanced error handling.
 
         Args:
             clerk_id: Clerk user ID
+            request_id: Request ID for tracking
 
         Returns:
             ClerkUser object with user information
 
         Raises:
             AuthenticationError: If user not found or API error
+            ExternalServiceError: If Clerk API is unavailable
+        """
+        async with error_context("get_user_by_clerk_id", request_id=request_id, clerk_id=clerk_id):
+            # Check cache first
+            cached_user_data = await self.cache_service.get_cached_user_data(clerk_id)
+            if cached_user_data:
+                logger.debug("Using cached user data for clerk_id: %s", clerk_id)
+                # Convert cached data back to ClerkUser format
+                clerk_user_data = self._convert_cached_to_clerk_format(cached_user_data)
+                return ClerkUser(clerk_user_data)
+
+            # Fetch from Clerk API with fallback
+            return await fallback_manager.execute_with_fallback(
+                primary_func=self._fetch_user_from_clerk_api,
+                fallback_func=self._get_user_from_cache_fallback,
+                operation_name="get_user_by_clerk_id",
+                request_id=request_id,
+                clerk_id=clerk_id
+            )
+
+    async def _fetch_user_from_clerk_api(self, clerk_id: str, request_id: Optional[str] = None) -> ClerkUser:
+        """
+        Fetch user from Clerk API with proper error handling.
+        
+        Args:
+            clerk_id: Clerk user ID
+            request_id: Request ID for tracking
+            
+        Returns:
+            ClerkUser object
+            
+        Raises:
+            ExternalServiceError: If API call fails
+            AuthenticationError: If user not found
         """
         try:
-            async with httpx.AsyncClient() as client:
+            timeout = httpx.Timeout(settings.CLERK_REQUEST_TIMEOUT)
+            async with httpx.AsyncClient(timeout=timeout) as client:
                 response = await client.get(
                     f"{self.base_url}/users/{clerk_id}",
                     headers={
@@ -167,13 +304,78 @@ class ClerkService:
                 return ClerkUser(user_data)
 
         except httpx.HTTPStatusError as e:
-            logger.error(
-                f"Clerk API error: {e.response.status_code} - {e.response.text}"
-            )
-            raise AuthenticationError("Failed to fetch user from Clerk")
+            raise handle_clerk_api_error(e, "get_user_by_clerk_id", clerk_id, request_id)
+        except httpx.TimeoutException as e:
+            raise handle_clerk_api_error(e, "get_user_by_clerk_id", clerk_id, request_id)
+        except httpx.ConnectError as e:
+            raise handle_clerk_api_error(e, "get_user_by_clerk_id", clerk_id, request_id)
         except Exception as e:
-            logger.error(f"Error fetching user from Clerk: {e}")
-            raise AuthenticationError("User lookup failed")
+            raise handle_clerk_api_error(e, "get_user_by_clerk_id", clerk_id, request_id)
+
+    async def _get_user_from_cache_fallback(self, clerk_id: str, request_id: Optional[str] = None) -> Optional[ClerkUser]:
+        """
+        Fallback method to get user from cache when Clerk API is unavailable.
+        
+        Args:
+            clerk_id: Clerk user ID
+            request_id: Request ID for tracking
+            
+        Returns:
+            ClerkUser object if found in cache, None otherwise
+        """
+        logger.warning(f"Using cache fallback for user {clerk_id}")
+        
+        # Try to get from cache with extended search
+        cached_user_data = await self.cache_service.get_cached_user_data(clerk_id)
+        if cached_user_data:
+            clerk_user_data = self._convert_cached_to_clerk_format(cached_user_data)
+            return ClerkUser(clerk_user_data)
+        
+        # If not in cache, we can't provide fallback
+        raise AuthenticationError(
+            f"User {clerk_id} not found and Clerk API unavailable",
+            details={"fallback_attempted": True}
+        )
+
+    def _convert_cached_to_clerk_format(self, cached_data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Convert cached user data back to Clerk API format.
+
+        Args:
+            cached_data: Cached user data
+
+        Returns:
+            Dict in Clerk API format
+        """
+        # Convert cached data to match ClerkUser expected format
+        return {
+            "id": cached_data.get("clerk_id"),
+            "email_addresses": [
+                {
+                    "id": "primary",
+                    "email_address": cached_data.get("email"),
+                    "primary_email_address_id": "primary"
+                }
+            ] if cached_data.get("email") else [],
+            "first_name": cached_data.get("first_name"),
+            "last_name": cached_data.get("last_name"),
+            "phone_numbers": [
+                {
+                    "phone_number": cached_data.get("phone_number"),
+                    "primary": True
+                }
+            ] if cached_data.get("phone_number") else [],
+            "public_metadata": {
+                "role": cached_data.get("role")
+            },
+            "private_metadata": {},
+            "created_at": cached_data.get("created_at"),
+            "updated_at": cached_data.get("updated_at"),
+            "last_sign_in_at": None,
+            "image_url": cached_data.get("avatar_url"),
+            "banned": not cached_data.get("is_active", True),
+            "locked": not cached_data.get("is_verified", True)
+        }
 
     async def create_user_session(self, email: str, password: str) -> Dict[str, Any]:
         """
@@ -249,15 +451,20 @@ class ClerkService:
             logger.error(f"Development login error: {e}")
             raise AuthenticationError("Login failed")
 
-    async def _get_public_key(self, kid: str) -> str:
+    async def _get_public_key(self, kid: str, request_id: Optional[str] = None) -> str:
         """
         Get public key from Clerk's JWKS endpoint for JWT verification.
 
         Args:
             kid: Key ID from JWT header
+            request_id: Request ID for tracking
 
         Returns:
             Public key for verification
+            
+        Raises:
+            ExternalServiceError: If JWKS endpoint is unavailable
+            AuthenticationError: If key not found
         """
         try:
             # Check cache first
@@ -265,7 +472,8 @@ class ClerkService:
                 return self._jwks_cache[kid]
 
             # Fetch JWKS from Clerk
-            async with httpx.AsyncClient() as client:
+            timeout = httpx.Timeout(settings.CLERK_REQUEST_TIMEOUT)
+            async with httpx.AsyncClient(timeout=timeout) as client:
                 response = await client.get(self.jwks_url)
                 response.raise_for_status()
                 jwks = response.json()
@@ -290,9 +498,41 @@ class ClerkService:
 
             raise AuthenticationError(f"Public key not found for kid: {kid}")
 
+        except httpx.HTTPStatusError as e:
+            raise handle_clerk_api_error(e, "get_public_key", None, request_id)
+        except httpx.TimeoutException as e:
+            raise handle_clerk_api_error(e, "get_public_key", None, request_id)
+        except httpx.ConnectError as e:
+            raise handle_clerk_api_error(e, "get_public_key", None, request_id)
         except Exception as e:
-            logger.error(f"Error fetching public key: {e}")
+            auth_logger.log_clerk_api_error(
+                operation="get_public_key",
+                error_message=str(e),
+                request_id=request_id
+            )
             raise AuthenticationError("Failed to verify token signature")
+
+    async def _get_cached_public_key(self, kid: str, request_id: Optional[str] = None) -> Optional[str]:
+        """
+        Fallback method to get public key from cache when JWKS endpoint is unavailable.
+        
+        Args:
+            kid: Key ID from JWT header
+            request_id: Request ID for tracking
+            
+        Returns:
+            Cached public key if available, None otherwise
+        """
+        logger.warning(f"Using cached public key fallback for kid: {kid}")
+        
+        if kid in self._jwks_cache:
+            return self._jwks_cache[kid]
+        
+        # If no cached key available, we can't verify the token
+        raise AuthenticationError(
+            f"Public key {kid} not cached and JWKS endpoint unavailable",
+            details={"fallback_attempted": True}
+        )
 
     async def validate_webhook_signature(self, payload: bytes, signature: str) -> bool:
         """

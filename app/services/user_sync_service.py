@@ -19,6 +19,7 @@ from app.schemas.clerk_schemas import (
     ClerkUserSyncResponse
 )
 from app.core.exceptions import AuthenticationError
+from app.services.auth_cache_service import get_auth_cache_service
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +30,7 @@ class UserSyncService:
     def __init__(self, db: AsyncSession):
         self.db = db
         self.role_mapping = ClerkRoleMapping()
+        self.cache_service = get_auth_cache_service()
 
     async def create_user_from_clerk(self, clerk_user: ClerkUser) -> User:
         """
@@ -81,6 +83,9 @@ class UserSyncService:
             self.db.add(new_user)
             await self.db.commit()
             await self.db.refresh(new_user)
+
+            # Cache the new user data
+            await self.cache_service.cache_user_data(new_user)
 
             logger.info("Created user from Clerk: %s (%s)", new_user.email, new_user.id)
             return new_user
@@ -144,6 +149,9 @@ class UserSyncService:
             await self.db.commit()
             await self.db.refresh(user)
 
+            # Update cache with new user data
+            await self.cache_service.cache_user_data(user)
+
             logger.info("Updated user from Clerk: %s (%s)", user.email, user.id)
             return user
 
@@ -194,6 +202,9 @@ class UserSyncService:
 
             await self.db.commit()
             await self.db.refresh(user)
+
+            # Invalidate all cache entries for this user
+            await self.cache_service.invalidate_user_related_cache(clerk_id, str(user.id))
 
             logger.info("Handled user deletion for Clerk ID: %s (User ID: %s)", clerk_id, user.id)
 

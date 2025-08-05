@@ -1,6 +1,7 @@
 """
 API dependencies and middleware.
 """
+import logging
 from typing import Optional, Dict, Any
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
@@ -11,9 +12,11 @@ from app.core.redis import redis_client
 from app.core.exceptions import AuthenticationError
 from app.services.clerk_service import get_clerk_service
 from app.services.user_sync_service import UserSyncService
+from app.services.auth_cache_service import get_auth_cache_service
 from app.models.user import User, UserRole
 from app.schemas.clerk_schemas import ClerkUser
 
+logger = logging.getLogger(__name__)
 
 # Security scheme for JWT tokens
 security = HTTPBearer()
@@ -58,6 +61,7 @@ async def sync_clerk_user(
 ) -> User:
     """
     Ensure user exists in local database and sync with Clerk data.
+    Uses caching for performance optimization.
     
     Args:
         token_data: Verified token data from Clerk
@@ -72,9 +76,21 @@ async def sync_clerk_user(
     try:
         clerk_service = get_clerk_service()
         user_sync_service = UserSyncService(db)
+        cache_service = get_auth_cache_service()
         
-        # Get full user data from Clerk
-        clerk_user = await clerk_service.get_user_by_clerk_id(token_data["clerk_id"])
+        clerk_id = token_data["clerk_id"]
+        
+        # Try to get user from cache first
+        cached_user_data = await cache_service.get_cached_user_data(clerk_id)
+        if cached_user_data:
+            # Get local user by ID from cached data
+            local_user = await user_sync_service.get_user_by_clerk_id(clerk_id)
+            if local_user and local_user.is_active:
+                logger.debug("Using cached user data for authentication")
+                return local_user
+        
+        # Get full user data from Clerk (this may also use cache)
+        clerk_user = await clerk_service.get_user_by_clerk_id(clerk_id)
         
         # Sync user data
         sync_response = await user_sync_service.sync_user_data(clerk_user)
@@ -86,7 +102,7 @@ async def sync_clerk_user(
             )
         
         # Get the local user
-        local_user = await user_sync_service.get_user_by_clerk_id(token_data["clerk_id"])
+        local_user = await user_sync_service.get_user_by_clerk_id(clerk_id)
         if not local_user:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
