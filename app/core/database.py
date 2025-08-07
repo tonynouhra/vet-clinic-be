@@ -22,14 +22,23 @@ Base = declarative_base()
 metadata = MetaData()
 
 # Async engine configuration
-engine = create_async_engine(
-    settings.DATABASE_URL,
-    echo=settings.DEBUG,  # Log SQL queries in debug mode
-    pool_size=settings.DATABASE_POOL_SIZE,
-    max_overflow=settings.DATABASE_MAX_OVERFLOW,
-    pool_pre_ping=True,  # Validate connections before use
-    pool_recycle=3600,  # Recycle connections every hour
-)
+if "sqlite" in settings.DATABASE_URL:
+    # SQLite configuration (for testing)
+    engine = create_async_engine(
+        settings.DATABASE_URL,
+        echo=settings.DEBUG,  # Log SQL queries in debug mode
+        poolclass=NullPool,  # SQLite doesn't support connection pooling
+    )
+else:
+    # PostgreSQL configuration (for production)
+    engine = create_async_engine(
+        settings.DATABASE_URL,
+        echo=settings.DEBUG,  # Log SQL queries in debug mode
+        pool_size=settings.DATABASE_POOL_SIZE,
+        max_overflow=settings.DATABASE_MAX_OVERFLOW,
+        pool_pre_ping=True,  # Validate connections before use
+        pool_recycle=3600,  # Recycle connections every hour
+    )
 
 # Async session factory
 AsyncSessionLocal = async_sessionmaker(
