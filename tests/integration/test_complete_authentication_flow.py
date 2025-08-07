@@ -586,11 +586,27 @@ class TestWebhookDrivenUserSynchronization:
         timestamp = str(int(datetime.utcnow().timestamp()))
         signature = self.create_webhook_signature(payload_str, timestamp, webhook_secret)
 
-        with patch.object(settings, 'CLERK_WEBHOOK_SECRET', webhook_secret), \
-             patch('app.api.webhooks.clerk.get_db') as mock_get_db:
+        with patch('app.api.webhooks.clerk.get_settings') as mock_get_settings, \
+             patch('app.api.webhooks.clerk.get_db') as mock_get_db, \
+             patch('app.api.webhooks.clerk.UserSyncService') as mock_sync_service_class:
+            
+            # Mock settings with webhook secret
+            mock_settings = Mock()
+            mock_settings.CLERK_WEBHOOK_SECRET = webhook_secret
+            mock_get_settings.return_value = mock_settings
             
             mock_db = AsyncMock()
             mock_get_db.return_value = mock_db
+            
+            # Mock user sync service
+            mock_sync_service = AsyncMock()
+            mock_sync_service_class.return_value = mock_sync_service
+            mock_sync_service.sync_user_data.return_value = ClerkUserSyncResponse(
+                success=True,
+                user_id="test_user_id",
+                action="created",
+                message="User created successfully"
+            )
 
             response = client.post(
                 "/webhooks/clerk",

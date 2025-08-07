@@ -41,7 +41,7 @@ if __name__ == "__main__":
     # Run the specific test
     test_command = [
         sys.executable, "-m", "pytest", 
-        "tests/integration/test_complete_authentication_flow.py::TestCompleteAuthenticationFlow::test_complete_user_registration_flow",
+        "tests/integration/test_complete_authentication_flow.py",
         "-v", "--tb=short"
     ]
     

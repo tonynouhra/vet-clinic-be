@@ -36,7 +36,8 @@ async def verify_webhook_signature(request: Request) -> bool:
     Raises:
         HTTPException: If signature verification fails
     """
-    if not settings.CLERK_WEBHOOK_SECRET:
+    current_settings = get_settings()
+    if not current_settings.CLERK_WEBHOOK_SECRET:
         logger.error("Clerk webhook secret not configured")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -84,7 +85,7 @@ async def verify_webhook_signature(request: Request) -> bool:
     
     # Calculate expected signature
     expected_signature = hmac.new(
-        settings.CLERK_WEBHOOK_SECRET.encode(),
+        current_settings.CLERK_WEBHOOK_SECRET.encode(),
         signed_payload.encode(),
         hashlib.sha256
     ).hexdigest()
