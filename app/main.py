@@ -176,21 +176,34 @@ async def global_exception_handler(request: Request, exc: Exception):
     )
 
 
-# Health check endpoint
+# Health check endpoint (basic compatibility)
 @app.get("/health")
 async def health_check():
-    """Health check endpoint."""
-    from app.core.database import DatabaseHealthCheck
-
-    db_health = DatabaseHealthCheck()
-    db_status = await db_health.check_connection()
-
-    return {
-        "status": "healthy" if db_status else "unhealthy",
-        "environment": settings.ENVIRONMENT,
-        "version": settings.APP_VERSION,
-        "database": "connected" if db_status else "disconnected",
-    }
+    """Basic health check endpoint for Docker and load balancers."""
+    from app.services.monitoring_service import get_monitoring_service
+    
+    monitoring_service = get_monitoring_service()
+    
+    try:
+        # Quick database check for basic health
+        db_result = await monitoring_service.check_database_health()
+        
+        return {
+            "status": "healthy" if db_result.status == "healthy" else "unhealthy",
+            "environment": settings.ENVIRONMENT,
+            "version": settings.APP_VERSION,
+            "database": db_result.status,
+            "timestamp": db_result.timestamp.isoformat() + "Z"
+        }
+    except Exception as e:
+        logger.error(f"Health check failed: {e}")
+        return {
+            "status": "unhealthy",
+            "environment": settings.ENVIRONMENT,
+            "version": settings.APP_VERSION,
+            "database": "error",
+            "error": str(e)
+        }
 
 
 # Root endpoint
@@ -207,12 +220,15 @@ async def root():
 
 
 # Add API routes
-from app.api import auth
+from app.api import auth, monitoring
 from app.api.v1 import api_router as v1_router
+from app.api.v2 import api_router as v2_router
 from app.api.webhooks import clerk as clerk_webhooks
 
 app.include_router(auth.router, prefix=settings.API_V1_PREFIX)
 app.include_router(v1_router, prefix=settings.API_V1_PREFIX)
+app.include_router(v2_router, prefix=settings.API_V2_PREFIX)
+app.include_router(monitoring.router)  # Monitoring endpoints at root level
 app.include_router(clerk_webhooks.router)  # Webhooks don't need API version prefix
 
 

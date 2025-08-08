@@ -15,7 +15,7 @@ from pydantic import BaseModel
 
 from app.core.database import get_db
 from app.core.exceptions import VetClinicException, NotFoundError, ValidationError
-from app.models.pet import Pet, PetGender, PetSize, HealthRecord, HealthRecordType
+from app.models.pet import Pet, PetGender, PetSize, HealthRecord, HealthRecordType, Reminder
 from .services import PetService
 
 
@@ -463,6 +463,11 @@ class PetController:
                 **{k: v for k, v in data.items() if k not in ["record_type", "title", "description", "record_date"]}
             )
             
+            # Schedule reminder if next_due_date is provided
+            next_due_date = data.get("next_due_date")
+            if next_due_date and record_type in [HealthRecordType.VACCINATION, HealthRecordType.MEDICATION]:
+                await self._schedule_health_reminder(record, next_due_date)
+            
             return record
             
         except ValidationError as e:
@@ -663,3 +668,183 @@ class PetController:
             from datetime import date as current_date
             if record_date > current_date.today():
                 raise ValidationError("Record date cannot be in the future")
+
+    async def create_reminder(
+        self,
+        pet_id: uuid.UUID,
+        reminder_data: Union[BaseModel, Dict[str, Any]],
+        created_by: Optional[uuid.UUID] = None,
+        **kwargs
+    ) -> Reminder:
+        """
+        Create a reminder for a pet.
+        
+        Args:
+            pet_id: Pet UUID
+            reminder_data: Reminder data
+            created_by: ID of user creating the reminder
+            **kwargs: Additional parameters for future versions
+            
+        Returns:
+            Created reminder
+        """
+        try:
+            # Extract data from schema or dict
+            if isinstance(reminder_data, BaseModel):
+                data = reminder_data.model_dump(exclude_unset=True)
+            else:
+                data = reminder_data
+            
+            # Business rule validation
+            await self._validate_reminder_creation(pet_id, data, created_by)
+            
+            # Create reminder
+            reminder = await self.service.create_reminder(
+                pet_id=pet_id,
+                **data
+            )
+            
+            return reminder
+            
+        except ValidationError as e:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        except VetClinicException as e:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        except Exception as e:
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Internal server error")
+
+    async def get_pet_reminders(
+        self,
+        pet_id: uuid.UUID,
+        reminder_type: Optional[str] = None,
+        is_completed: Optional[bool] = None,
+        due_before: Optional[date] = None,
+        **kwargs
+    ) -> List[Reminder]:
+        """
+        Get reminders for a pet.
+        
+        Args:
+            pet_id: Pet UUID
+            reminder_type: Filter by reminder type
+            is_completed: Filter by completion status
+            due_before: Filter by due date
+            **kwargs: Additional parameters for future versions
+            
+        Returns:
+            List of reminders
+        """
+        try:
+            reminders = await self.service.get_pet_reminders(
+                pet_id=pet_id,
+                reminder_type=reminder_type,
+                is_completed=is_completed,
+                due_before=due_before,
+                **kwargs
+            )
+            return reminders
+            
+        except VetClinicException as e:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        except Exception as e:
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Internal server error")
+
+    async def complete_reminder(
+        self,
+        reminder_id: uuid.UUID,
+        completed_by: Optional[uuid.UUID] = None,
+        **kwargs
+    ) -> Reminder:
+        """
+        Mark a reminder as completed.
+        
+        Args:
+            reminder_id: Reminder UUID
+            completed_by: ID of user completing the reminder
+            **kwargs: Additional parameters for future versions
+            
+        Returns:
+            Updated reminder
+        """
+        try:
+            reminder = await self.service.complete_reminder(reminder_id)
+            return reminder
+            
+        except NotFoundError as e:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+        except VetClinicException as e:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        except Exception as e:
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Internal server error")
+
+    # Private helper methods for reminder functionality
+
+    async def _schedule_health_reminder(
+        self,
+        health_record: HealthRecord,
+        due_date: date
+    ) -> None:
+        """Schedule a reminder for a health record."""
+        try:
+            # Calculate reminder date (7 days before due date)
+            from datetime import timedelta
+            reminder_date = due_date - timedelta(days=7)
+            
+            # Don't create reminder if it's in the past
+            if reminder_date <= date.today():
+                return
+            
+            reminder_title = f"{health_record.title} Due"
+            reminder_description = f"Reminder: {health_record.title} is due on {due_date}"
+            
+            if health_record.record_type == HealthRecordType.VACCINATION:
+                reminder_type = "vaccination"
+                reminder_description = f"Vaccination reminder: {health_record.medication_name or health_record.title} is due on {due_date}"
+            elif health_record.record_type == HealthRecordType.MEDICATION:
+                reminder_type = "medication"
+                reminder_description = f"Medication reminder: {health_record.medication_name or health_record.title} is due on {due_date}"
+            else:
+                reminder_type = "health_record"
+            
+            await self.service.create_reminder(
+                pet_id=health_record.pet_id,
+                health_record_id=health_record.id,
+                title=reminder_title,
+                description=reminder_description,
+                reminder_type=reminder_type,
+                due_date=due_date,
+                reminder_date=reminder_date,
+                is_recurring=False
+            )
+            
+        except Exception as e:
+            # Log error but don't fail the health record creation
+            print(f"Failed to schedule reminder for health record {health_record.id}: {str(e)}")
+
+    async def _validate_reminder_creation(
+        self,
+        pet_id: uuid.UUID,
+        data: Dict[str, Any],
+        created_by: Optional[uuid.UUID]
+    ) -> None:
+        """Validate business rules for reminder creation."""
+        # Validate required fields
+        required_fields = ["title", "reminder_type", "due_date", "reminder_date"]
+        for field in required_fields:
+            if not data.get(field):
+                raise ValidationError(f"{field} is required")
+        
+        # Validate title is not empty
+        title = data.get("title", "").strip()
+        if not title:
+            raise ValidationError("Reminder title cannot be empty")
+        
+        # Validate dates
+        due_date = data.get("due_date")
+        reminder_date = data.get("reminder_date")
+        
+        if reminder_date and reminder_date > due_date:
+            raise ValidationError("Reminder date cannot be after due date")
+        
+        # Check if pet exists
+        await self.service.get_pet_by_id(pet_id)

@@ -37,7 +37,7 @@ from app.api.schemas.v1.appointments import (
     AppointmentOperationSuccessV1
 )
 
-router = APIRouter(prefix="/appointments", tags=["appointments-v1"])
+router = APIRouter(tags=["appointments-v1"])
 
 
 # Helper function to convert Appointment model to V1 response
@@ -366,3 +366,213 @@ async def delete_appointment(
         "message": "Appointment deleted successfully",
         "version": "v1"
     }
+
+
+# Scheduling-specific endpoints
+
+@router.get("/availability", response_model=dict)
+async def get_availability(
+    veterinarian_id: uuid.UUID = Query(description="Veterinarian ID"),
+    clinic_id: uuid.UUID = Query(description="Clinic ID"),
+    start_date: date = Query(description="Start date for availability search"),
+    end_date: Optional[date] = Query(None, description="End date for availability search"),
+    duration_minutes: int = Query(30, description="Required appointment duration", ge=15, le=480),
+    current_user = Depends(get_current_user),
+    controller: AppointmentController = Depends(get_controller(AppointmentController))
+):
+    """
+    Get available appointment slots for a veterinarian at a clinic.
+    
+    V1 provides basic availability checking for appointment booking.
+    """
+    available_slots = await controller.get_available_slots(
+        veterinarian_id=veterinarian_id,
+        clinic_id=clinic_id,
+        start_date=start_date,
+        end_date=end_date,
+        duration_minutes=duration_minutes
+    )
+    
+    return {
+        "success": True,
+        "data": {
+            "available_slots": available_slots,
+            "veterinarian_id": veterinarian_id,
+            "clinic_id": clinic_id,
+            "start_date": start_date.isoformat(),
+            "end_date": end_date.isoformat() if end_date else None,
+            "duration_minutes": duration_minutes
+        },
+        "message": "Available slots retrieved successfully",
+        "version": "v1"
+    }
+
+
+@router.get("/calendar", response_model=dict)
+async def get_calendar_view(
+    veterinarian_id: Optional[uuid.UUID] = Query(None, description="Filter by veterinarian ID"),
+    clinic_id: Optional[uuid.UUID] = Query(None, description="Filter by clinic ID"),
+    start_date: date = Query(description="Calendar start date"),
+    end_date: Optional[date] = Query(None, description="Calendar end date"),
+    view_type: str = Query("week", description="Calendar view type (day, week, month)"),
+    current_user = Depends(get_current_user),
+    controller: AppointmentController = Depends(get_controller(AppointmentController))
+):
+    """
+    Get calendar view of appointments and availability.
+    
+    V1 provides basic calendar view for appointment scheduling.
+    """
+    calendar_data = await controller.get_calendar_view(
+        veterinarian_id=veterinarian_id,
+        clinic_id=clinic_id,
+        start_date=start_date,
+        end_date=end_date,
+        view_type=view_type
+    )
+    
+    return {
+        "success": True,
+        "data": calendar_data,
+        "message": "Calendar view retrieved successfully",
+        "version": "v1"
+    }
+
+
+@router.post("/check-conflicts", response_model=dict)
+async def check_appointment_conflicts(
+    veterinarian_id: uuid.UUID,
+    scheduled_at: datetime,
+    duration_minutes: int = 30,
+    exclude_appointment_id: Optional[uuid.UUID] = None,
+    current_user = Depends(get_current_user),
+    controller: AppointmentController = Depends(get_controller(AppointmentController))
+):
+    """
+    Check for appointment conflicts before booking or rescheduling.
+    
+    V1 provides conflict detection for appointment scheduling.
+    """
+    conflicts = await controller.check_appointment_conflicts(
+        veterinarian_id=veterinarian_id,
+        scheduled_at=scheduled_at,
+        duration_minutes=duration_minutes,
+        exclude_appointment_id=exclude_appointment_id
+    )
+    
+    return {
+        "success": True,
+        "data": {
+            "has_conflicts": len(conflicts) > 0,
+            "conflicts": conflicts,
+            "veterinarian_id": veterinarian_id,
+            "scheduled_at": scheduled_at.isoformat(),
+            "duration_minutes": duration_minutes
+        },
+        "message": "Conflict check completed successfully",
+        "version": "v1"
+    }
+
+
+@router.get("/statistics", response_model=dict)
+async def get_appointment_statistics(
+    veterinarian_id: Optional[uuid.UUID] = Query(None, description="Filter by veterinarian ID"),
+    clinic_id: Optional[uuid.UUID] = Query(None, description="Filter by clinic ID"),
+    start_date: Optional[date] = Query(None, description="Statistics start date"),
+    end_date: Optional[date] = Query(None, description="Statistics end date"),
+    current_user = Depends(get_current_user),
+    controller: AppointmentController = Depends(get_controller(AppointmentController))
+):
+    """
+    Get appointment statistics for reporting and analytics.
+    
+    V1 provides basic appointment statistics and metrics.
+    """
+    try:
+        from app.appointments.services import AppointmentService
+        from app.core.database import get_db
+        
+        async with get_db() as db:
+            service = AppointmentService(db)
+            statistics = await service.get_appointment_statistics(
+                veterinarian_id=veterinarian_id,
+                clinic_id=clinic_id,
+                start_date=start_date,
+                end_date=end_date
+            )
+        
+        return {
+            "success": True,
+            "data": statistics,
+            "message": "Statistics retrieved successfully",
+            "version": "v1"
+        }
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+
+
+@router.post("/slots/create", response_model=dict)
+async def create_appointment_slots(
+    veterinarian_id: uuid.UUID,
+    clinic_id: uuid.UUID,
+    start_date: date,
+    end_date: date,
+    start_time: str = "09:00",
+    end_time: str = "17:00",
+    slot_duration: int = 30,
+    break_duration: int = 0,
+    exclude_weekends: bool = True,
+    current_user = Depends(get_current_user),
+    controller: AppointmentController = Depends(get_controller(AppointmentController))
+):
+    """
+    Create appointment slots for a veterinarian at a clinic.
+    
+    V1 provides basic slot creation functionality for appointment scheduling.
+    """
+    try:
+        from app.appointments.services import AppointmentService
+        from app.core.database import get_db
+        
+        async with get_db() as db:
+            service = AppointmentService(db)
+            created_slots = await service.create_appointment_slots(
+                veterinarian_id=veterinarian_id,
+                clinic_id=clinic_id,
+                start_date=start_date,
+                end_date=end_date,
+                start_time=start_time,
+                end_time=end_time,
+                slot_duration=slot_duration,
+                break_duration=break_duration,
+                exclude_weekends=exclude_weekends
+            )
+        
+        slot_data = []
+        for slot in created_slots:
+            slot_data.append({
+                "id": str(slot.id),
+                "start_time": slot.start_time.isoformat(),
+                "end_time": slot.end_time.isoformat(),
+                "duration_minutes": slot.duration_minutes,
+                "slot_type": slot.slot_type,
+                "is_available": slot.is_available
+            })
+        
+        return {
+            "success": True,
+            "data": {
+                "created_slots": slot_data,
+                "total_created": len(created_slots),
+                "veterinarian_id": veterinarian_id,
+                "clinic_id": clinic_id,
+                "period": {
+                    "start_date": start_date.isoformat(),
+                    "end_date": end_date.isoformat()
+                }
+            },
+            "message": f"Successfully created {len(created_slots)} appointment slots",
+            "version": "v1"
+        }
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))

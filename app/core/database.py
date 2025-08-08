@@ -49,6 +49,9 @@ AsyncSessionLocal = async_sessionmaker(
     autocommit=False,
 )
 
+# Alias for background tasks
+async_session_maker = AsyncSessionLocal
+
 
 async def get_db() -> AsyncGenerator[AsyncSession, None]:
     """
@@ -66,6 +69,11 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
             raise
         finally:
             await session.close()
+
+
+def get_db_session():
+    """Get database session for background tasks."""
+    return AsyncSessionLocal()
 
 
 async def init_db() -> None:

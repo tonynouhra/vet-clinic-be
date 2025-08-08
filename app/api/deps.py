@@ -37,17 +37,41 @@ async def verify_clerk_token(
     Raises:
         HTTPException: If token verification fails
     """
+    from app.services.monitoring_service import get_monitoring_service
+    import time
+    
+    monitoring_service = get_monitoring_service()
+    start_time = time.time()
+    
     try:
         clerk_service = get_clerk_service()
         token_data = await clerk_service.verify_jwt_token(credentials.credentials)
+        
+        # Record successful authentication
+        duration = time.time() - start_time
+        monitoring_service.record_authentication_attempt(success=True)
+        monitoring_service.record_performance_metric("token_validation", duration)
+        
         return token_data
     except AuthenticationError as e:
+        # Record failed authentication with error type
+        duration = time.time() - start_time
+        monitoring_service.record_authentication_attempt(success=False, error_type="authentication_error")
+        monitoring_service.record_token_validation_error("authentication_failed")
+        monitoring_service.record_performance_metric("token_validation", duration)
+        
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=str(e),
             headers={"WWW-Authenticate": "Bearer"},
         )
-    except Exception:
+    except Exception as e:
+        # Record failed authentication with generic error
+        duration = time.time() - start_time
+        monitoring_service.record_authentication_attempt(success=False, error_type="unexpected_error")
+        monitoring_service.record_token_validation_error("unexpected_error")
+        monitoring_service.record_performance_metric("token_validation", duration)
+        
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Could not validate credentials",
@@ -73,6 +97,12 @@ async def sync_clerk_user(
     Raises:
         HTTPException: If user sync fails
     """
+    from app.services.monitoring_service import get_monitoring_service
+    import time
+    
+    monitoring_service = get_monitoring_service()
+    start_time = time.time()
+    
     try:
         clerk_service = get_clerk_service()
         user_sync_service = UserSyncService(db)
@@ -87,6 +117,8 @@ async def sync_clerk_user(
             local_user = await user_sync_service.get_user_by_clerk_id(clerk_id)
             if local_user and local_user.is_active:
                 logger.debug("Using cached user data for authentication")
+                duration = time.time() - start_time
+                monitoring_service.record_performance_metric("user_sync", duration)
                 return local_user
         
         # Get full user data from Clerk (this may also use cache)
@@ -96,6 +128,8 @@ async def sync_clerk_user(
         sync_response = await user_sync_service.sync_user_data(clerk_user)
         
         if not sync_response.success:
+            duration = time.time() - start_time
+            monitoring_service.record_performance_metric("user_sync", duration)
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=f"User synchronization failed: {sync_response.message}"
@@ -104,16 +138,24 @@ async def sync_clerk_user(
         # Get the local user
         local_user = await user_sync_service.get_user_by_clerk_id(clerk_id)
         if not local_user:
+            duration = time.time() - start_time
+            monitoring_service.record_performance_metric("user_sync", duration)
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="User not found after synchronization"
             )
         
+        duration = time.time() - start_time
+        monitoring_service.record_performance_metric("user_sync", duration)
         return local_user
         
     except HTTPException:
+        duration = time.time() - start_time
+        monitoring_service.record_performance_metric("user_sync", duration)
         raise
     except Exception:
+        duration = time.time() - start_time
+        monitoring_service.record_performance_metric("user_sync", duration)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="User synchronization failed"
@@ -179,6 +221,10 @@ def require_role(required_role: UserRole):
     """
     async def role_checker(current_user: User = Depends(get_current_active_user)) -> User:
         if current_user.role != required_role:
+            from app.services.monitoring_service import get_monitoring_service
+            monitoring_service = get_monitoring_service()
+            monitoring_service.record_authorization_failure("insufficient_role")
+            
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail=f"Access denied. Required role: {required_role.value}, current role: {current_user.role.value}"
@@ -200,6 +246,10 @@ def require_any_role(required_roles: list[UserRole]):
     """
     async def role_checker(current_user: User = Depends(get_current_active_user)) -> User:
         if current_user.role not in required_roles:
+            from app.services.monitoring_service import get_monitoring_service
+            monitoring_service = get_monitoring_service()
+            monitoring_service.record_authorization_failure("insufficient_role")
+            
             role_names = [role.value for role in required_roles]
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
@@ -222,6 +272,10 @@ def require_permission(required_permission: str):
     """
     async def permission_checker(current_user: User = Depends(get_current_active_user)) -> User:
         if not current_user.has_permission(required_permission):
+            from app.services.monitoring_service import get_monitoring_service
+            monitoring_service = get_monitoring_service()
+            monitoring_service.record_authorization_failure("insufficient_permission")
+            
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail=f"Access denied. Required permission: {required_permission}"

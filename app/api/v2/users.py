@@ -34,7 +34,7 @@ from app.api.schemas.v2.users import (
     BatchOperationResultV2
 )
 
-router = APIRouter(prefix="/users", tags=["users-v2"])
+router = APIRouter(tags=["users-v2"])
 
 
 # Helper function to convert User model to V2 response

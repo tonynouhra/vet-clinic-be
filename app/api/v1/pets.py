@@ -19,7 +19,7 @@ from sqlalchemy.orm import relationship
 from app.core.database import get_db
 from app.api.deps import get_current_user, require_any_role, require_role
 from app.models.user import User, UserRole
-from app.models.pet import PetGender, PetSize
+from app.models.pet import PetGender, PetSize, HealthRecordType
 from app.pets.controller import PetController
 from app.api.schemas.v1.pets import (
     PetCreateV1,
@@ -27,12 +27,18 @@ from app.api.schemas.v1.pets import (
     PetResponseV1,
     PetListResponseV1,
     DeceasedPetRequestV1,
+    HealthRecordCreateV1,
+    HealthRecordResponseV1,
+    ReminderCreateV1,
+    ReminderResponseV1,
     PetCreateResponseV1,
     PetUpdateResponseV1,
     PetGetResponseV1,
     PetListResponseModelV1,
     PetDeleteResponseV1,
-    PetDeceasedResponseV1
+    PetDeceasedResponseV1,
+    PetHealthRecordResponseV1,
+    PetReminderResponseV1
 )
 
 router = APIRouter()
@@ -349,4 +355,240 @@ async def mark_pet_deceased(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to mark pet as deceased: {str(e)}"
+        )
+
+@router.post("/{pet_id}/health-records", response_model=PetHealthRecordResponseV1, status_code=status.HTTP_201_CREATED)
+async def add_health_record(
+    pet_id: uuid.UUID,
+    record_data: HealthRecordCreateV1,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_role([UserRole.CLINIC_MANAGER, UserRole.VETERINARIAN]))
+):
+    """
+    Add a health record to a pet.
+    V1 endpoint for basic health record management.
+    """
+    try:
+        controller = PetController(db)
+        
+        health_record = await controller.add_health_record(
+            pet_id=pet_id,
+            record_data=record_data,
+            created_by=current_user.id
+        )
+        
+        return PetHealthRecordResponseV1(
+            success=True,
+            data=HealthRecordResponseV1.model_validate(health_record),
+            version="v1"
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to add health record: {str(e)}"
+        )
+
+
+@router.get("/{pet_id}/health-records", response_model=List[HealthRecordResponseV1])
+async def get_pet_health_records(
+    pet_id: uuid.UUID,
+    record_type: Optional[HealthRecordType] = Query(None, description="Filter by record type"),
+    start_date: Optional[date] = Query(None, description="Filter by start date"),
+    end_date: Optional[date] = Query(None, description="Filter by end date"),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Get health records for a pet with filtering.
+    V1 endpoint for health record retrieval.
+    """
+    try:
+        controller = PetController(db)
+        
+        health_records = await controller.get_pet_health_records(
+            pet_id=pet_id,
+            record_type=record_type,
+            start_date=start_date,
+            end_date=end_date
+        )
+        
+        return [HealthRecordResponseV1.model_validate(record) for record in health_records]
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to get health records: {str(e)}"
+        )
+
+
+@router.get("/{pet_id}/vaccinations", response_model=List[HealthRecordResponseV1])
+async def get_pet_vaccinations(
+    pet_id: uuid.UUID,
+    start_date: Optional[date] = Query(None, description="Filter by start date"),
+    end_date: Optional[date] = Query(None, description="Filter by end date"),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Get vaccination records for a pet.
+    V1 endpoint for vaccination tracking.
+    """
+    try:
+        controller = PetController(db)
+        
+        vaccinations = await controller.get_pet_health_records(
+            pet_id=pet_id,
+            record_type=HealthRecordType.VACCINATION,
+            start_date=start_date,
+            end_date=end_date
+        )
+        
+        return [HealthRecordResponseV1.model_validate(record) for record in vaccinations]
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to get vaccinations: {str(e)}"
+        )
+
+
+@router.get("/{pet_id}/medications", response_model=List[HealthRecordResponseV1])
+async def get_pet_medications(
+    pet_id: uuid.UUID,
+    start_date: Optional[date] = Query(None, description="Filter by start date"),
+    end_date: Optional[date] = Query(None, description="Filter by end date"),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Get medication records for a pet.
+    V1 endpoint for medication tracking.
+    """
+    try:
+        controller = PetController(db)
+        
+        medications = await controller.get_pet_health_records(
+            pet_id=pet_id,
+            record_type=HealthRecordType.MEDICATION,
+            start_date=start_date,
+            end_date=end_date
+        )
+        
+        return [HealthRecordResponseV1.model_validate(record) for record in medications]
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to get medications: {str(e)}"
+        )
+
+
+@router.post("/{pet_id}/reminders", response_model=PetReminderResponseV1, status_code=status.HTTP_201_CREATED)
+async def create_reminder(
+    pet_id: uuid.UUID,
+    reminder_data: ReminderCreateV1,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_role([UserRole.CLINIC_MANAGER, UserRole.VETERINARIAN]))
+):
+    """
+    Create a reminder for a pet.
+    V1 endpoint for reminder management.
+    """
+    try:
+        controller = PetController(db)
+        
+        reminder = await controller.create_reminder(
+            pet_id=pet_id,
+            reminder_data=reminder_data,
+            created_by=current_user.id
+        )
+        
+        return PetReminderResponseV1(
+            success=True,
+            data=ReminderResponseV1.model_validate(reminder),
+            version="v1"
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to create reminder: {str(e)}"
+        )
+
+
+@router.get("/{pet_id}/reminders", response_model=List[ReminderResponseV1])
+async def get_pet_reminders(
+    pet_id: uuid.UUID,
+    reminder_type: Optional[str] = Query(None, description="Filter by reminder type"),
+    is_completed: Optional[bool] = Query(None, description="Filter by completion status"),
+    due_before: Optional[date] = Query(None, description="Filter by due date"),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Get reminders for a pet.
+    V1 endpoint for reminder retrieval.
+    """
+    try:
+        controller = PetController(db)
+        
+        reminders = await controller.get_pet_reminders(
+            pet_id=pet_id,
+            reminder_type=reminder_type,
+            is_completed=is_completed,
+            due_before=due_before
+        )
+        
+        return [ReminderResponseV1.model_validate(reminder) for reminder in reminders]
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to get reminders: {str(e)}"
+        )
+
+
+@router.patch("/reminders/{reminder_id}/complete", response_model=PetReminderResponseV1)
+async def complete_reminder(
+    reminder_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_role([UserRole.CLINIC_MANAGER, UserRole.VETERINARIAN]))
+):
+    """
+    Mark a reminder as completed.
+    V1 endpoint for reminder completion.
+    """
+    try:
+        controller = PetController(db)
+        
+        reminder = await controller.complete_reminder(
+            reminder_id=reminder_id,
+            completed_by=current_user.id
+        )
+        
+        return PetReminderResponseV1(
+            success=True,
+            data=ReminderResponseV1.model_validate(reminder),
+            version="v1"
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to complete reminder: {str(e)}"
         )

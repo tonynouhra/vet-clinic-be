@@ -5,13 +5,13 @@ V1 focuses on essential pet information and basic CRUD operations.
 """
 
 from typing import Optional, List
-from datetime import date
+from datetime import date, datetime
 from pydantic import Field, validator
 import uuid
 
 from app.api.schemas.base import BaseSchema, TimestampMixin, IDMixin, create_response_model
 from app.api.schemas.validators import SchemaValidationMixin
-from app.models.pet import PetGender, PetSize
+from app.models.pet import PetGender, PetSize, HealthRecordType
 
 
 class PetCreateV1(BaseSchema, SchemaValidationMixin):
@@ -210,6 +210,68 @@ class DeceasedPetRequestV1(BaseSchema):
         return v
 
 
+class HealthRecordCreateV1(BaseSchema, SchemaValidationMixin):
+    """V1 schema for creating health records."""
+    
+    record_type: HealthRecordType = Field(..., description="Record type")
+    title: str = Field(..., min_length=1, max_length=200, description="Record title")
+    description: Optional[str] = Field(None, description="Record description")
+    record_date: date = Field(..., description="Record date")
+    next_due_date: Optional[date] = Field(None, description="Next due date for recurring items")
+    diagnosis: Optional[str] = Field(None, description="Diagnosis")
+    treatment: Optional[str] = Field(None, description="Treatment provided")
+    medication_name: Optional[str] = Field(None, max_length=200, description="Medication name")
+    dosage: Optional[str] = Field(None, max_length=100, description="Medication dosage")
+    frequency: Optional[str] = Field(None, max_length=100, description="Medication frequency")
+    duration: Optional[str] = Field(None, max_length=100, description="Treatment duration")
+    cost: Optional[float] = Field(None, ge=0, description="Cost of treatment")
+    notes: Optional[str] = Field(None, description="Additional notes")
+
+    @validator('title')
+    def validate_title(cls, v):
+        if not v or not v.strip():
+            raise ValueError('Health record title cannot be empty')
+        return v.strip()
+
+    @validator('record_date')
+    def validate_record_date(cls, v):
+        if v > date.today():
+            raise ValueError('Record date cannot be in the future')
+        return v
+
+    @validator('next_due_date')
+    def validate_next_due_date(cls, v, values):
+        if v is not None:
+            record_date = values.get('record_date')
+            if record_date and v <= record_date:
+                raise ValueError('Next due date must be after record date')
+        return v
+
+
+class HealthRecordResponseV1(BaseSchema, IDMixin, TimestampMixin):
+    """V1 schema for health record responses."""
+    
+    pet_id: uuid.UUID = Field(..., description="Pet ID")
+    veterinarian_id: Optional[uuid.UUID] = Field(None, description="Veterinarian ID")
+    record_type: HealthRecordType = Field(..., description="Record type")
+    title: str = Field(..., description="Record title")
+    description: Optional[str] = Field(None, description="Record description")
+    record_date: date = Field(..., description="Record date")
+    next_due_date: Optional[date] = Field(None, description="Next due date")
+    diagnosis: Optional[str] = Field(None, description="Diagnosis")
+    treatment: Optional[str] = Field(None, description="Treatment provided")
+    medication_name: Optional[str] = Field(None, description="Medication name")
+    dosage: Optional[str] = Field(None, description="Medication dosage")
+    frequency: Optional[str] = Field(None, description="Medication frequency")
+    duration: Optional[str] = Field(None, description="Treatment duration")
+    cost: Optional[float] = Field(None, description="Cost of treatment")
+    notes: Optional[str] = Field(None, description="Additional notes")
+    is_active: bool = Field(..., description="Is record active")
+
+    class Config:
+        from_attributes = True
+
+
 # Response model factories for V1
 PetCreateResponseV1 = create_response_model(PetResponseV1, "v1")
 PetUpdateResponseV1 = create_response_model(PetResponseV1, "v1")
@@ -217,3 +279,61 @@ PetGetResponseV1 = create_response_model(PetResponseV1, "v1")
 PetListResponseModelV1 = create_response_model(PetListResponseV1, "v1")
 PetDeleteResponseV1 = create_response_model(dict, "v1")  # Simple success message
 PetDeceasedResponseV1 = create_response_model(PetResponseV1, "v1")
+class ReminderCreateV1(BaseSchema, SchemaValidationMixin):
+    """V1 schema for creating reminders."""
+    
+    title: str = Field(..., min_length=1, max_length=200, description="Reminder title")
+    description: Optional[str] = Field(None, description="Reminder description")
+    reminder_type: str = Field(..., description="Type of reminder (vaccination, medication, checkup, etc.)")
+    due_date: date = Field(..., description="Due date")
+    reminder_date: date = Field(..., description="When to send reminder")
+    health_record_id: Optional[uuid.UUID] = Field(None, description="Associated health record ID")
+    is_recurring: bool = Field(False, description="Is recurring reminder")
+    recurrence_interval_days: Optional[int] = Field(None, ge=1, description="Recurrence interval in days")
+
+    @validator('title')
+    def validate_title(cls, v):
+        if not v or not v.strip():
+            raise ValueError('Reminder title cannot be empty')
+        return v.strip()
+
+    @validator('reminder_date')
+    def validate_reminder_date(cls, v, values):
+        due_date = values.get('due_date')
+        if due_date and v > due_date:
+            raise ValueError('Reminder date cannot be after due date')
+        return v
+
+    @validator('recurrence_interval_days')
+    def validate_recurrence_interval(cls, v, values):
+        is_recurring = values.get('is_recurring', False)
+        if is_recurring and not v:
+            raise ValueError('Recurrence interval is required for recurring reminders')
+        if not is_recurring and v:
+            raise ValueError('Recurrence interval should not be set for non-recurring reminders')
+        return v
+
+
+class ReminderResponseV1(BaseSchema, IDMixin, TimestampMixin):
+    """V1 schema for reminder responses."""
+    
+    pet_id: uuid.UUID = Field(..., description="Pet ID")
+    health_record_id: Optional[uuid.UUID] = Field(None, description="Associated health record ID")
+    title: str = Field(..., description="Reminder title")
+    description: Optional[str] = Field(None, description="Reminder description")
+    reminder_type: str = Field(..., description="Type of reminder")
+    due_date: date = Field(..., description="Due date")
+    reminder_date: date = Field(..., description="When to send reminder")
+    is_recurring: bool = Field(..., description="Is recurring reminder")
+    recurrence_interval_days: Optional[int] = Field(None, description="Recurrence interval in days")
+    is_completed: bool = Field(..., description="Is reminder completed")
+    is_sent: bool = Field(..., description="Is reminder sent")
+    completed_at: Optional[datetime] = Field(None, description="Completion timestamp")
+    sent_at: Optional[datetime] = Field(None, description="Sent timestamp")
+
+    class Config:
+        from_attributes = True
+
+
+PetHealthRecordResponseV1 = create_response_model(HealthRecordResponseV1, "v1")
+PetReminderResponseV1 = create_response_model(ReminderResponseV1, "v1")

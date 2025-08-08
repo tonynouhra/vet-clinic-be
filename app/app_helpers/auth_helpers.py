@@ -217,10 +217,31 @@ def require_permission(required_permission: str) -> Callable:
         ):
             return await delete_pet_by_id(pet_id)
     """
-    async def _require_permission(current_user: Dict[str, Any] = Depends(get_current_user)) -> Dict[str, Any]:
+    async def _require_permission(
+        current_user: Dict[str, Any] = Depends(get_current_user),
+        request: Request = None
+    ) -> Dict[str, Any]:
         user_permissions = current_user.get("permissions", [])
+        user_role = current_user.get("role")
         
+        # Admin users have all permissions
+        if user_role == "admin":
+            return current_user
+        
+        # Check if user has the specific permission
         if required_permission not in user_permissions:
+            # Log authorization failure
+            auth_logger.log_authorization_failure(
+                user_id=current_user.get("user_id"),
+                clerk_id=current_user.get("clerk_id"),
+                required_permission=required_permission,
+                user_permissions=user_permissions,
+                endpoint=request.url.path if request else None,
+                method=request.method if request else None,
+                request_id=current_user.get("request_id"),
+                ip_address=request.client.host if request and request.client else None
+            )
+            
             raise AuthorizationError(
                 message=f"Access denied. Required permission: {required_permission}",
                 details={
@@ -359,10 +380,35 @@ def get_optional_user() -> Callable:
 
 # Role hierarchy for permission checking
 ROLE_HIERARCHY = {
-    "admin": ["admin", "veterinarian", "receptionist", "pet_owner"],
+    "admin": ["admin", "veterinarian", "receptionist", "clinic_manager", "pet_owner"],
+    "clinic_manager": ["clinic_manager", "receptionist", "pet_owner"],
     "veterinarian": ["veterinarian", "pet_owner"],
     "receptionist": ["receptionist", "pet_owner"],
     "pet_owner": ["pet_owner"]
+}
+
+# Permission mappings for roles
+ROLE_PERMISSIONS = {
+    "admin": ["*"],  # Admin has all permissions
+    "clinic_manager": [
+        "users:read", "users:write", "users:delete",
+        "pets:read", "appointments:read", "appointments:write",
+        "clinics:read", "clinics:write", "reports:read",
+        "staff:read", "staff:write"
+    ],
+    "veterinarian": [
+        "pets:read", "pets:write", "appointments:read", "appointments:write",
+        "health_records:read", "health_records:write", "users:read",
+        "prescriptions:read", "prescriptions:write"
+    ],
+    "receptionist": [
+        "appointments:read", "appointments:write", "users:read", "pets:read",
+        "scheduling:read", "scheduling:write"
+    ],
+    "pet_owner": [
+        "pets:read", "pets:write", "appointments:read", "appointments:write",
+        "profile:read", "profile:write", "health_records:read"
+    ]
 }
 
 
@@ -379,3 +425,207 @@ def has_role_access(user_role: str, required_role: str) -> bool:
     """
     allowed_roles = ROLE_HIERARCHY.get(user_role, [])
     return required_role in allowed_roles
+
+
+def get_user_permissions(user_role: str) -> list:
+    """
+    Get permissions for a user role.
+    
+    Args:
+        user_role: User's role
+        
+    Returns:
+        list: List of permissions for the role
+    """
+    return ROLE_PERMISSIONS.get(user_role, [])
+
+
+def has_permission(user_role: str, required_permission: str) -> bool:
+    """
+    Check if user role has a specific permission.
+    
+    Args:
+        user_role: User's role
+        required_permission: Required permission
+        
+    Returns:
+        bool: True if user has permission
+    """
+    permissions = get_user_permissions(user_role)
+    return "*" in permissions or required_permission in permissions
+
+
+def require_staff_access() -> Callable:
+    """
+    Create a dependency that requires staff-level access (admin, clinic_manager, veterinarian, receptionist).
+    
+    Returns:
+        Callable: Dependency function that validates staff access
+        
+    Example:
+        @router.get("/staff/dashboard")
+        async def staff_dashboard(
+            current_user: Dict[str, Any] = Depends(require_staff_access())
+        ):
+            return await get_staff_dashboard()
+    """
+    return require_any_role(["admin", "clinic_manager", "veterinarian", "receptionist"])
+
+
+def require_management_access() -> Callable:
+    """
+    Create a dependency that requires management-level access (admin, clinic_manager).
+    
+    Returns:
+        Callable: Dependency function that validates management access
+        
+    Example:
+        @router.get("/management/reports")
+        async def management_reports(
+            current_user: Dict[str, Any] = Depends(require_management_access())
+        ):
+            return await get_management_reports()
+    """
+    return require_any_role(["admin", "clinic_manager"])
+
+
+def require_medical_access() -> Callable:
+    """
+    Create a dependency that requires medical access (admin, veterinarian).
+    
+    Returns:
+        Callable: Dependency function that validates medical access
+        
+    Example:
+        @router.post("/medical/prescriptions")
+        async def create_prescription(
+            current_user: Dict[str, Any] = Depends(require_medical_access())
+        ):
+            return await create_prescription()
+    """
+    return require_any_role(["admin", "veterinarian"])
+
+
+def require_multiple_permissions(required_permissions: list) -> Callable:
+    """
+    Create a dependency that requires multiple permissions.
+    
+    Args:
+        required_permissions: List of required permissions (all must be present)
+        
+    Returns:
+        Callable: Dependency function that validates multiple permissions
+        
+    Example:
+        @router.post("/pets/{pet_id}/prescriptions")
+        async def create_prescription(
+            current_user: Dict[str, Any] = Depends(
+                require_multiple_permissions(["pets:write", "prescriptions:write"])
+            )
+        ):
+            return await create_prescription()
+    """
+    async def _require_multiple_permissions(
+        current_user: Dict[str, Any] = Depends(get_current_user),
+        request: Request = None
+    ) -> Dict[str, Any]:
+        user_permissions = current_user.get("permissions", [])
+        user_role = current_user.get("role")
+        
+        # Admin users have all permissions
+        if user_role == "admin":
+            return current_user
+        
+        # Check if user has all required permissions
+        missing_permissions = [
+            perm for perm in required_permissions 
+            if perm not in user_permissions
+        ]
+        
+        if missing_permissions:
+            # Log authorization failure
+            auth_logger.log_authorization_failure(
+                user_id=current_user.get("user_id"),
+                clerk_id=current_user.get("clerk_id"),
+                required_permissions=required_permissions,
+                missing_permissions=missing_permissions,
+                user_permissions=user_permissions,
+                endpoint=request.url.path if request else None,
+                method=request.method if request else None,
+                request_id=current_user.get("request_id"),
+                ip_address=request.client.host if request and request.client else None
+            )
+            
+            raise AuthorizationError(
+                message=f"Access denied. Missing permissions: {', '.join(missing_permissions)}",
+                details={
+                    "required_permissions": required_permissions,
+                    "missing_permissions": missing_permissions,
+                    "user_permissions": user_permissions
+                }
+            )
+        
+        return current_user
+    
+    return _require_multiple_permissions
+
+
+def require_any_permission(required_permissions: list) -> Callable:
+    """
+    Create a dependency that requires any of the specified permissions.
+    
+    Args:
+        required_permissions: List of permissions (at least one must be present)
+        
+    Returns:
+        Callable: Dependency function that validates any permission
+        
+    Example:
+        @router.get("/pets/{pet_id}")
+        async def get_pet(
+            current_user: Dict[str, Any] = Depends(
+                require_any_permission(["pets:read", "pets:write"])
+            )
+        ):
+            return await get_pet()
+    """
+    async def _require_any_permission(
+        current_user: Dict[str, Any] = Depends(get_current_user),
+        request: Request = None
+    ) -> Dict[str, Any]:
+        user_permissions = current_user.get("permissions", [])
+        user_role = current_user.get("role")
+        
+        # Admin users have all permissions
+        if user_role == "admin":
+            return current_user
+        
+        # Check if user has any of the required permissions
+        has_any_permission = any(
+            perm in user_permissions for perm in required_permissions
+        )
+        
+        if not has_any_permission:
+            # Log authorization failure
+            auth_logger.log_authorization_failure(
+                user_id=current_user.get("user_id"),
+                clerk_id=current_user.get("clerk_id"),
+                required_permissions=required_permissions,
+                user_permissions=user_permissions,
+                endpoint=request.url.path if request else None,
+                method=request.method if request else None,
+                request_id=current_user.get("request_id"),
+                ip_address=request.client.host if request and request.client else None
+            )
+            
+            raise AuthorizationError(
+                message=f"Access denied. Required permissions (any): {', '.join(required_permissions)}",
+                details={
+                    "required_permissions": required_permissions,
+                    "user_permissions": user_permissions
+                }
+            )
+        
+        return current_user
+    
+    return _require_any_permission

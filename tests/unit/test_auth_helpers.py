@@ -67,7 +67,11 @@ class TestVerifyToken:
         assert result["role"] == "veterinarian"
         assert result["permissions"] == ["pets:read", "pets:write"]
         assert result["session_id"] == "session_789"
-        mock_clerk_service.verify_jwt_token.assert_called_once_with("valid_jwt_token")
+        # Check that verify_jwt_token was called with the token and request_id
+        mock_clerk_service.verify_jwt_token.assert_called_once()
+        call_args = mock_clerk_service.verify_jwt_token.call_args
+        assert call_args[0][0] == "valid_jwt_token"  # First positional arg is the token
+        assert "request_id" in call_args[1]  # request_id is in kwargs
 
     @pytest.mark.asyncio
     async def test_verify_token_invalid_token(self, mock_credentials, mock_clerk_service):

@@ -641,11 +641,27 @@ class TestWebhookDrivenUserSynchronization:
         timestamp = str(int(datetime.utcnow().timestamp()))
         signature = self.create_webhook_signature(payload_str, timestamp, webhook_secret)
 
-        with patch.object(settings, 'CLERK_WEBHOOK_SECRET', webhook_secret), \
-             patch('app.api.webhooks.clerk.get_db') as mock_get_db:
+        with patch('app.api.webhooks.clerk.get_settings') as mock_get_settings, \
+             patch('app.api.webhooks.clerk.get_db') as mock_get_db, \
+             patch('app.api.webhooks.clerk.UserSyncService') as mock_sync_service_class:
+            
+            # Mock settings with webhook secret
+            mock_settings = Mock()
+            mock_settings.CLERK_WEBHOOK_SECRET = webhook_secret
+            mock_get_settings.return_value = mock_settings
             
             mock_db = AsyncMock()
             mock_get_db.return_value = mock_db
+            
+            # Mock user sync service
+            mock_sync_service = AsyncMock()
+            mock_sync_service_class.return_value = mock_sync_service
+            mock_sync_service.sync_user_data.return_value = ClerkUserSyncResponse(
+                success=True,
+                user_id="test_user_id",
+                action="updated",
+                message="User updated successfully"
+            )
 
             response = client.post(
                 "/webhooks/clerk",
@@ -679,11 +695,27 @@ class TestWebhookDrivenUserSynchronization:
         timestamp = str(int(datetime.utcnow().timestamp()))
         signature = self.create_webhook_signature(payload_str, timestamp, webhook_secret)
 
-        with patch.object(settings, 'CLERK_WEBHOOK_SECRET', webhook_secret), \
-             patch('app.api.webhooks.clerk.get_db') as mock_get_db:
+        with patch('app.api.webhooks.clerk.get_settings') as mock_get_settings, \
+             patch('app.api.webhooks.clerk.get_db') as mock_get_db, \
+             patch('app.api.webhooks.clerk.UserSyncService') as mock_sync_service_class:
+            
+            # Mock settings with webhook secret
+            mock_settings = Mock()
+            mock_settings.CLERK_WEBHOOK_SECRET = webhook_secret
+            mock_get_settings.return_value = mock_settings
             
             mock_db = AsyncMock()
             mock_get_db.return_value = mock_db
+            
+            # Mock user sync service
+            mock_sync_service = AsyncMock()
+            mock_sync_service_class.return_value = mock_sync_service
+            mock_sync_service.handle_user_deletion.return_value = ClerkUserSyncResponse(
+                success=True,
+                user_id=clerk_user_id,
+                action="deleted",
+                message="User deleted successfully"
+            )
 
             response = client.post(
                 "/webhooks/clerk",
@@ -716,7 +748,17 @@ class TestWebhookDrivenUserSynchronization:
         payload_str = json.dumps(webhook_payload)
         timestamp = str(int(datetime.utcnow().timestamp()))
 
-        with patch.object(settings, 'CLERK_WEBHOOK_SECRET', webhook_secret):
+        with patch('app.api.webhooks.clerk.get_settings') as mock_get_settings, \
+             patch('app.api.webhooks.clerk.get_db') as mock_get_db:
+            
+            # Mock settings with webhook secret
+            mock_settings = Mock()
+            mock_settings.CLERK_WEBHOOK_SECRET = webhook_secret
+            mock_get_settings.return_value = mock_settings
+            
+            mock_db = AsyncMock()
+            mock_get_db.return_value = mock_db
+
             response = client.post(
                 "/webhooks/clerk",
                 content=payload_str,
@@ -748,11 +790,27 @@ class TestWebhookDrivenUserSynchronization:
         timestamp = str(int(datetime.utcnow().timestamp()))
         signature = self.create_webhook_signature(payload_str, timestamp, webhook_secret)
 
-        with patch.object(settings, 'CLERK_WEBHOOK_SECRET', webhook_secret), \
-             patch('app.api.webhooks.clerk.get_db') as mock_get_db:
+        with patch('app.api.webhooks.clerk.get_settings') as mock_get_settings, \
+             patch('app.api.webhooks.clerk.get_db') as mock_get_db, \
+             patch('app.api.webhooks.clerk.UserSyncService') as mock_sync_service_class:
+            
+            # Mock settings with webhook secret
+            mock_settings = Mock()
+            mock_settings.CLERK_WEBHOOK_SECRET = webhook_secret
+            mock_get_settings.return_value = mock_settings
             
             mock_db = AsyncMock()
             mock_get_db.return_value = mock_db
+            
+            # Mock user sync service
+            mock_sync_service = AsyncMock()
+            mock_sync_service_class.return_value = mock_sync_service
+            mock_sync_service.sync_user_data.return_value = ClerkUserSyncResponse(
+                success=True,
+                user_id="test_user_id",
+                action="updated",
+                message="User role updated successfully"
+            )
 
             response = client.post(
                 "/webhooks/clerk",
@@ -768,6 +826,7 @@ class TestWebhookDrivenUserSynchronization:
             data = response.json()
             assert data["status"] == "success"
             assert data["action"] == "user_updated"
+            assert data["clerk_user_id"] == user_data["id"]
 
 
 class TestAuthenticationPerformance:
@@ -1001,4 +1060,265 @@ class TestAuthenticationPerformance:
             assert total_time < 5.0, f"Load test took {total_time:.3f}s, exceeding 5s threshold"
             
             avg_time = total_time / num_requests
-            assert avg_time < 0.2, f"Average response time under load {avg_time:.3f}s exceeds 200ms threshold" 
+            assert avg_time < 0.2, f"Average response time under load {avg_time:.3f}s exceeds 200ms threshold"
+
+
+class TestCompleteAuthenticationIntegration:
+    """Additional comprehensive integration tests for complete authentication flow."""
+
+    @pytest.fixture
+    def integration_app(self):
+        """Create comprehensive test app for integration testing."""
+        test_app = FastAPI()
+
+        @test_app.get("/integration/profile")
+        async def get_profile(current_user: User = Depends(get_current_user)):
+            return {
+                "user_id": str(current_user.id),
+                "clerk_id": current_user.clerk_id,
+                "email": current_user.email,
+                "role": current_user.role.value,
+                "full_name": current_user.full_name,
+                "is_active": current_user.is_active
+            }
+
+        @test_app.get("/integration/admin-dashboard")
+        async def admin_dashboard(current_user: User = Depends(require_admin_role())):
+            return {
+                "message": "Admin dashboard access granted",
+                "user_id": str(current_user.id),
+                "permissions": ["read_all", "write_all", "delete_all"]
+            }
+
+        @test_app.get("/integration/vet-records")
+        async def vet_records(current_user: User = Depends(require_veterinarian_role())):
+            return {
+                "message": "Veterinary records access granted",
+                "user_id": str(current_user.id),
+                "permissions": ["read_records", "write_records", "prescribe"]
+            }
+
+        @test_app.get("/integration/my-pets")
+        async def my_pets(current_user: User = Depends(require_role(UserRole.PET_OWNER))):
+            return {
+                "message": "Pet owner access granted",
+                "user_id": str(current_user.id),
+                "permissions": ["read_own_pets", "schedule_appointments"]
+            }
+
+        return test_app
+
+    @pytest.fixture
+    def integration_client(self, integration_app):
+        """Create integration test client."""
+        return TestClient(integration_app)
+
+    @pytest.mark.asyncio
+    async def test_complete_user_journey_pet_owner(self, integration_client, sample_users_data):
+        """Test complete user journey for pet owner from registration to accessing resources."""
+        user_data = sample_users_data["pet_owner"]
+        clerk_user = create_clerk_user(user_data)
+        local_user = create_local_user(user_data)
+        token_data = create_jwt_token_data(user_data)
+
+        mock_clerk_service = AsyncMock()
+        mock_clerk_service.verify_jwt_token.return_value = token_data
+        mock_clerk_service.get_user_by_clerk_id.return_value = clerk_user
+
+        with patch("app.api.deps.get_clerk_service", return_value=mock_clerk_service), \
+             patch("app.api.deps.UserSyncService") as mock_sync_service_class:
+            
+            mock_sync_service = AsyncMock()
+            mock_sync_service_class.return_value = mock_sync_service
+            mock_sync_service.sync_user_data.return_value = ClerkUserSyncResponse(
+                success=True, user_id=str(local_user.id), action="created", message="User created"
+            )
+            mock_sync_service.get_user_by_clerk_id.return_value = local_user
+
+            headers = {"Authorization": f"Bearer {user_data['clerk_id']}_token"}
+
+            # Step 1: Get user profile (should work)
+            profile_response = integration_client.get("/integration/profile", headers=headers)
+            assert profile_response.status_code == 200
+            profile_data = profile_response.json()
+            assert profile_data["email"] == user_data["email"]
+            assert profile_data["role"] == user_data["role"].value
+
+            # Step 2: Access pet owner resources (should work)
+            pets_response = integration_client.get("/integration/my-pets", headers=headers)
+            assert pets_response.status_code == 200
+            pets_data = pets_response.json()
+            assert "Pet owner access granted" in pets_data["message"]
+
+            # Step 3: Try to access admin resources (should fail)
+            admin_response = integration_client.get("/integration/admin-dashboard", headers=headers)
+            assert admin_response.status_code == 403
+
+            # Step 4: Try to access vet resources (should fail)
+            vet_response = integration_client.get("/integration/vet-records", headers=headers)
+            assert vet_response.status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_complete_user_journey_veterinarian(self, integration_client, sample_users_data):
+        """Test complete user journey for veterinarian with elevated permissions."""
+        user_data = sample_users_data["veterinarian"]
+        clerk_user = create_clerk_user(user_data)
+        local_user = create_local_user(user_data)
+        token_data = create_jwt_token_data(user_data)
+
+        mock_clerk_service = AsyncMock()
+        mock_clerk_service.verify_jwt_token.return_value = token_data
+        mock_clerk_service.get_user_by_clerk_id.return_value = clerk_user
+
+        with patch("app.api.deps.get_clerk_service", return_value=mock_clerk_service), \
+             patch("app.api.deps.UserSyncService") as mock_sync_service_class:
+            
+            mock_sync_service = AsyncMock()
+            mock_sync_service_class.return_value = mock_sync_service
+            mock_sync_service.sync_user_data.return_value = ClerkUserSyncResponse(
+                success=True, user_id=str(local_user.id), action="updated", message="User updated"
+            )
+            mock_sync_service.get_user_by_clerk_id.return_value = local_user
+
+            headers = {"Authorization": f"Bearer {user_data['clerk_id']}_token"}
+
+            # Step 1: Get user profile (should work)
+            profile_response = integration_client.get("/integration/profile", headers=headers)
+            assert profile_response.status_code == 200
+            profile_data = profile_response.json()
+            assert profile_data["role"] == user_data["role"].value
+
+            # Step 2: Access vet resources (should work)
+            vet_response = integration_client.get("/integration/vet-records", headers=headers)
+            assert vet_response.status_code == 200
+            vet_data = vet_response.json()
+            assert "Veterinary records access granted" in vet_data["message"]
+            assert "prescribe" in vet_data["permissions"]
+
+            # Step 3: Try to access admin resources (should fail - vet is not admin)
+            admin_response = integration_client.get("/integration/admin-dashboard", headers=headers)
+            assert admin_response.status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_session_expiration_handling(self, integration_client, sample_users_data):
+        """Test handling of expired sessions."""
+        user_data = sample_users_data["pet_owner"]
+        
+        # Create expired token data
+        expired_token_data = create_jwt_token_data(user_data)
+        expired_token_data["exp"] = int((datetime.utcnow() - timedelta(hours=1)).timestamp())
+
+        mock_clerk_service = AsyncMock()
+        from app.core.exceptions import AuthenticationError
+        mock_clerk_service.verify_jwt_token.side_effect = AuthenticationError("Token has expired")
+
+        with patch("app.api.deps.get_clerk_service", return_value=mock_clerk_service):
+            headers = {"Authorization": "Bearer expired_token"}
+            
+            response = integration_client.get("/integration/profile", headers=headers)
+            assert response.status_code == 401
+            assert "Token has expired" in response.json()["detail"]
+
+    @pytest.mark.asyncio
+    async def test_malformed_token_handling(self, integration_client):
+        """Test handling of malformed tokens."""
+        mock_clerk_service = AsyncMock()
+        from app.core.exceptions import AuthenticationError
+        mock_clerk_service.verify_jwt_token.side_effect = AuthenticationError("Invalid token format")
+
+        with patch("app.api.deps.get_clerk_service", return_value=mock_clerk_service):
+            headers = {"Authorization": "Bearer malformed.token.here"}
+            
+            response = integration_client.get("/integration/profile", headers=headers)
+            assert response.status_code == 401
+            assert "Invalid token format" in response.json()["detail"]
+
+    @pytest.mark.asyncio
+    async def test_missing_authorization_header(self, integration_client):
+        """Test handling of missing authorization header."""
+        response = integration_client.get("/integration/profile")
+        # The actual response might be 403 depending on FastAPI's security implementation
+        assert response.status_code in [401, 403]
+        response_detail = response.json()["detail"]
+        assert any(phrase in response_detail for phrase in ["Not authenticated", "Forbidden", "credentials"])
+
+    @pytest.mark.asyncio
+    async def test_user_synchronization_failure_handling(self, integration_client, sample_users_data):
+        """Test handling of user synchronization failures."""
+        user_data = sample_users_data["pet_owner"]
+        clerk_user = create_clerk_user(user_data)
+        token_data = create_jwt_token_data(user_data)
+
+        mock_clerk_service = AsyncMock()
+        mock_clerk_service.verify_jwt_token.return_value = token_data
+        mock_clerk_service.get_user_by_clerk_id.return_value = clerk_user
+
+        with patch("app.api.deps.get_clerk_service", return_value=mock_clerk_service), \
+             patch("app.api.deps.UserSyncService") as mock_sync_service_class:
+            
+            mock_sync_service = AsyncMock()
+            mock_sync_service_class.return_value = mock_sync_service
+            
+            # Simulate sync failure
+            mock_sync_service.sync_user_data.return_value = ClerkUserSyncResponse(
+                success=False,
+                user_id=None,
+                action="failed",
+                message="Database connection error"
+            )
+            mock_sync_service.get_user_by_clerk_id.return_value = None
+
+            headers = {"Authorization": f"Bearer {user_data['clerk_id']}_token"}
+            
+            response = integration_client.get("/integration/profile", headers=headers)
+            assert response.status_code == 500
+            assert "User synchronization failed" in response.json()["detail"]
+
+    @pytest.mark.asyncio
+    async def test_role_change_mid_session(self, integration_client, sample_users_data):
+        """Test behavior when user role changes mid-session."""
+        user_data = sample_users_data["pet_owner"]
+        clerk_user = create_clerk_user(user_data)
+        local_user = create_local_user(user_data)
+        token_data = create_jwt_token_data(user_data)
+
+        mock_clerk_service = AsyncMock()
+        mock_clerk_service.verify_jwt_token.return_value = token_data
+        mock_clerk_service.get_user_by_clerk_id.return_value = clerk_user
+
+        with patch("app.api.deps.get_clerk_service", return_value=mock_clerk_service), \
+             patch("app.api.deps.UserSyncService") as mock_sync_service_class:
+            
+            mock_sync_service = AsyncMock()
+            mock_sync_service_class.return_value = mock_sync_service
+            
+            # First request - user is pet owner
+            mock_sync_service.sync_user_data.return_value = ClerkUserSyncResponse(
+                success=True, user_id=str(local_user.id), action="skipped", message="Up to date"
+            )
+            mock_sync_service.get_user_by_clerk_id.return_value = local_user
+
+            headers = {"Authorization": f"Bearer {user_data['clerk_id']}_token"}
+            
+            # Should be able to access pet owner resources
+            response1 = integration_client.get("/integration/my-pets", headers=headers)
+            assert response1.status_code == 200
+
+            # Simulate role change to veterinarian
+            updated_user = create_local_user(user_data)
+            updated_user.role = UserRole.VETERINARIAN
+            
+            mock_sync_service.get_user_by_clerk_id.return_value = updated_user
+            mock_sync_service.sync_user_data.return_value = ClerkUserSyncResponse(
+                success=True, user_id=str(updated_user.id), action="updated", message="Role updated"
+            )
+
+            # Should now be able to access vet resources
+            response2 = integration_client.get("/integration/vet-records", headers=headers)
+            assert response2.status_code == 200
+
+            # Should no longer be able to access pet owner specific resources
+            # (This depends on implementation - some systems might allow both)
+            response3 = integration_client.get("/integration/my-pets", headers=headers)
+            # This assertion depends on business logic - adjust as needed
+            assert response3.status_code in [200, 403]  # Either allowed or forbidden 

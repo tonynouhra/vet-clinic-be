@@ -655,3 +655,208 @@ class PetService:
             
         except Exception as e:
             raise VetClinicException(f"Failed to get pet health records: {str(e)}")
+
+    async def create_reminder(
+        self,
+        pet_id: uuid.UUID,
+        title: str,
+        reminder_type: str,
+        due_date: date,
+        reminder_date: date,
+        description: Optional[str] = None,
+        health_record_id: Optional[uuid.UUID] = None,
+        is_recurring: bool = False,
+        recurrence_interval_days: Optional[int] = None,
+        **kwargs
+    ) -> Reminder:
+        """
+        Create a reminder for a pet.
+        
+        Args:
+            pet_id: Pet UUID
+            title: Reminder title
+            reminder_type: Type of reminder
+            due_date: Due date
+            reminder_date: When to send reminder
+            description: Reminder description
+            health_record_id: Associated health record ID
+            is_recurring: Is recurring reminder
+            recurrence_interval_days: Recurrence interval in days
+            **kwargs: Additional parameters for future versions
+            
+        Returns:
+            Created reminder
+        """
+        try:
+            # Verify pet exists
+            await self.get_pet_by_id(pet_id)
+            
+            reminder_data = {
+                "pet_id": pet_id,
+                "title": title.strip(),
+                "description": description.strip() if description else None,
+                "reminder_type": reminder_type,
+                "due_date": due_date,
+                "reminder_date": reminder_date,
+                "health_record_id": health_record_id,
+                "is_recurring": is_recurring,
+                "recurrence_interval_days": recurrence_interval_days,
+                "is_completed": False,
+                "is_sent": False
+            }
+            
+            new_reminder = Reminder(**reminder_data)
+            
+            self.db.add(new_reminder)
+            await self.db.commit()
+            await self.db.refresh(new_reminder)
+            
+            return new_reminder
+            
+        except Exception as e:
+            await self.db.rollback()
+            if isinstance(e, VetClinicException):
+                raise
+            raise VetClinicException(f"Failed to create reminder: {str(e)}")
+
+    async def get_pet_reminders(
+        self,
+        pet_id: uuid.UUID,
+        reminder_type: Optional[str] = None,
+        is_completed: Optional[bool] = None,
+        due_before: Optional[date] = None,
+        **kwargs
+    ) -> List[Reminder]:
+        """
+        Get reminders for a pet.
+        
+        Args:
+            pet_id: Pet UUID
+            reminder_type: Filter by reminder type
+            is_completed: Filter by completion status
+            due_before: Filter by due date
+            **kwargs: Additional parameters for future versions
+            
+        Returns:
+            List of reminders
+        """
+        try:
+            query = select(Reminder).where(Reminder.pet_id == pet_id)
+            
+            if reminder_type:
+                query = query.where(Reminder.reminder_type == reminder_type)
+            
+            if is_completed is not None:
+                query = query.where(Reminder.is_completed == is_completed)
+            
+            if due_before:
+                query = query.where(Reminder.due_date <= due_before)
+            
+            query = query.order_by(Reminder.due_date.asc())
+            
+            result = await self.db.execute(query)
+            reminders = result.scalars().all()
+            
+            return list(reminders)
+            
+        except Exception as e:
+            raise VetClinicException(f"Failed to get pet reminders: {str(e)}")
+
+    async def complete_reminder(self, reminder_id: uuid.UUID) -> Reminder:
+        """
+        Mark a reminder as completed.
+        
+        Args:
+            reminder_id: Reminder UUID
+            
+        Returns:
+            Updated reminder
+        """
+        try:
+            query = select(Reminder).where(Reminder.id == reminder_id)
+            result = await self.db.execute(query)
+            reminder = result.scalar_one_or_none()
+            
+            if not reminder:
+                raise NotFoundError(f"Reminder with id {reminder_id} not found")
+            
+            reminder.is_completed = True
+            reminder.completed_at = datetime.now()
+            
+            await self.db.commit()
+            await self.db.refresh(reminder)
+            
+            return reminder
+            
+        except Exception as e:
+            await self.db.rollback()
+            if isinstance(e, VetClinicException):
+                raise
+            raise VetClinicException(f"Failed to complete reminder: {str(e)}")
+
+    async def get_due_reminders(
+        self,
+        due_date: Optional[date] = None,
+        **kwargs
+    ) -> List[Reminder]:
+        """
+        Get reminders that are due for sending.
+        
+        Args:
+            due_date: Date to check for due reminders (defaults to today)
+            **kwargs: Additional parameters for future versions
+            
+        Returns:
+            List of due reminders
+        """
+        try:
+            if due_date is None:
+                due_date = date.today()
+            
+            query = select(Reminder).where(
+                and_(
+                    Reminder.reminder_date <= due_date,
+                    Reminder.is_sent == False,
+                    Reminder.is_completed == False
+                )
+            ).order_by(Reminder.reminder_date.asc())
+            
+            result = await self.db.execute(query)
+            reminders = result.scalars().all()
+            
+            return list(reminders)
+            
+        except Exception as e:
+            raise VetClinicException(f"Failed to get due reminders: {str(e)}")
+
+    async def mark_reminder_sent(self, reminder_id: uuid.UUID) -> Reminder:
+        """
+        Mark a reminder as sent.
+        
+        Args:
+            reminder_id: Reminder UUID
+            
+        Returns:
+            Updated reminder
+        """
+        try:
+            query = select(Reminder).where(Reminder.id == reminder_id)
+            result = await self.db.execute(query)
+            reminder = result.scalar_one_or_none()
+            
+            if not reminder:
+                raise NotFoundError(f"Reminder with id {reminder_id} not found")
+            
+            reminder.is_sent = True
+            reminder.sent_at = datetime.now()
+            
+            await self.db.commit()
+            await self.db.refresh(reminder)
+            
+            return reminder
+            
+        except Exception as e:
+            await self.db.rollback()
+            if isinstance(e, VetClinicException):
+                raise
+            raise VetClinicException(f"Failed to mark reminder as sent: {str(e)}")

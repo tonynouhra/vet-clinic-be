@@ -9,6 +9,7 @@ different API version schemas and returns raw data that can be formatted by any 
 from typing import List, Optional, Union, Dict, Any, Tuple
 from datetime import datetime, date
 import uuid
+import logging
 from fastapi import Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from pydantic import BaseModel
@@ -18,6 +19,14 @@ from app.core.exceptions import VetClinicException, NotFoundError, ValidationErr
 from app.models.appointment import Appointment, AppointmentStatus, AppointmentType, AppointmentPriority
 from .services import AppointmentService
 from ..app_helpers import validate_pagination_params
+from app.tasks.appointment_tasks import (
+    send_appointment_confirmation,
+    send_appointment_cancellation,
+    send_appointment_reschedule
+)
+
+
+logger = logging.getLogger(__name__)
 
 
 class AppointmentController:
@@ -178,6 +187,13 @@ class AppointmentController:
                 **kwargs
             )
             
+            # Trigger appointment confirmation notification (async task)
+            try:
+                send_appointment_confirmation.delay(str(appointment.id))
+            except Exception as e:
+                # Log error but don't fail the appointment creation
+                logger.error(f"Failed to trigger appointment confirmation notification: {str(e)}")
+            
             return appointment
             
         except ValidationError as e:
@@ -235,6 +251,14 @@ class AppointmentController:
             await self._validate_appointment_cancellation(appointment_id, cancelled_by)
             
             appointment = await self.service.cancel_appointment(appointment_id, cancellation_reason)
+            
+            # Trigger appointment cancellation notification (async task)
+            try:
+                send_appointment_cancellation.delay(str(appointment.id))
+            except Exception as e:
+                # Log error but don't fail the cancellation
+                logger.error(f"Failed to trigger appointment cancellation notification: {str(e)}")
+            
             return appointment
             
         except NotFoundError as e:
@@ -322,7 +346,19 @@ class AppointmentController:
             # Business rule validation
             await self._validate_appointment_reschedule(appointment_id, new_scheduled_at, rescheduled_by)
             
+            # Store old scheduled time for notification
+            old_appointment = await self.service.get_appointment_by_id(appointment_id)
+            old_scheduled_at = old_appointment.scheduled_at
+            
             appointment = await self.service.reschedule_appointment(appointment_id, new_scheduled_at)
+            
+            # Trigger appointment reschedule notification (async task)
+            try:
+                send_appointment_reschedule.delay(str(appointment.id), old_scheduled_at.isoformat())
+            except Exception as e:
+                # Log error but don't fail the reschedule
+                logger.error(f"Failed to trigger appointment reschedule notification: {str(e)}")
+            
             return appointment
             
         except NotFoundError as e:
@@ -384,6 +420,47 @@ class AppointmentController:
         scheduled_at = data.get("scheduled_at")
         if isinstance(scheduled_at, datetime) and scheduled_at <= datetime.utcnow():
             raise ValidationError("Appointment must be scheduled in the future")
+        
+        # Check for appointment conflicts
+        veterinarian_id = data.get("veterinarian_id")
+        duration_minutes = data.get("duration_minutes", 30)
+        
+        conflicts = await self.service.check_appointment_conflicts(
+            veterinarian_id=veterinarian_id,
+            scheduled_at=scheduled_at,
+            duration_minutes=duration_minutes
+        )
+        
+        if conflicts:
+            conflict_times = [conflict.scheduled_at.strftime("%Y-%m-%d %H:%M") for conflict in conflicts]
+            raise ValidationError(f"Appointment conflicts with existing appointments at: {', '.join(conflict_times)}")
+        
+        # Validate availability if slot-based scheduling is enabled
+        try:
+            available_slots = await self.service.get_available_slots(
+                veterinarian_id=veterinarian_id,
+                clinic_id=data.get("clinic_id"),
+                start_date=scheduled_at.date(),
+                end_date=scheduled_at.date(),
+                duration_minutes=duration_minutes
+            )
+            
+            # Check if the requested time slot is available
+            requested_time = scheduled_at
+            slot_available = False
+            
+            for slot in available_slots:
+                if (slot.start_time <= requested_time < slot.end_time and 
+                    not slot.is_fully_booked):
+                    slot_available = True
+                    break
+            
+            if not slot_available and available_slots:  # Only check if slots exist
+                raise ValidationError("Requested time slot is not available. Please choose from available slots.")
+                
+        except VetClinicException:
+            # If slot checking fails, continue with basic conflict checking
+            pass
 
     async def _validate_appointment_update(
         self,
@@ -446,3 +523,116 @@ class AppointmentController:
         
         # Additional business rules can be added here
         pass
+
+    # Scheduling-specific methods
+
+    async def get_available_slots(
+        self,
+        veterinarian_id: uuid.UUID,
+        clinic_id: uuid.UUID,
+        start_date: date,
+        end_date: Optional[date] = None,
+        duration_minutes: int = 30,
+        **kwargs
+    ) -> List[Dict[str, Any]]:
+        """
+        Get available appointment slots for a veterinarian at a clinic.
+        """
+        try:
+            slots = await self.service.get_available_slots(
+                veterinarian_id=veterinarian_id,
+                clinic_id=clinic_id,
+                start_date=start_date,
+                end_date=end_date,
+                duration_minutes=duration_minutes,
+                **kwargs
+            )
+            
+            # Convert slots to dict format for API response
+            available_slots = []
+            for slot in slots:
+                available_slots.append({
+                    "id": str(slot.id),
+                    "start_time": slot.start_time.isoformat(),
+                    "end_time": slot.end_time.isoformat(),
+                    "duration_minutes": slot.duration_minutes,
+                    "slot_type": slot.slot_type,
+                    "remaining_capacity": slot.remaining_capacity,
+                    "is_available": slot.is_available and not slot.is_fully_booked
+                })
+            
+            return available_slots
+            
+        except VetClinicException as e:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        except Exception as e:
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Internal server error")
+
+    async def get_calendar_view(
+        self,
+        veterinarian_id: Optional[uuid.UUID] = None,
+        clinic_id: Optional[uuid.UUID] = None,
+        start_date: date = None,
+        end_date: Optional[date] = None,
+        view_type: str = "week",
+        **kwargs
+    ) -> Dict[str, Any]:
+        """
+        Get calendar view of appointments and availability.
+        """
+        try:
+            calendar_data = await self.service.get_calendar_view(
+                veterinarian_id=veterinarian_id,
+                clinic_id=clinic_id,
+                start_date=start_date,
+                end_date=end_date,
+                view_type=view_type,
+                **kwargs
+            )
+            
+            return calendar_data
+            
+        except VetClinicException as e:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        except Exception as e:
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Internal server error")
+
+    async def check_appointment_conflicts(
+        self,
+        veterinarian_id: uuid.UUID,
+        scheduled_at: datetime,
+        duration_minutes: int = 30,
+        exclude_appointment_id: Optional[uuid.UUID] = None,
+        **kwargs
+    ) -> List[Dict[str, Any]]:
+        """
+        Check for appointment conflicts before booking or rescheduling.
+        """
+        try:
+            conflicts = await self.service.check_appointment_conflicts(
+                veterinarian_id=veterinarian_id,
+                scheduled_at=scheduled_at,
+                duration_minutes=duration_minutes,
+                exclude_appointment_id=exclude_appointment_id,
+                **kwargs
+            )
+            
+            # Convert conflicts to dict format for API response
+            conflict_list = []
+            for conflict in conflicts:
+                conflict_list.append({
+                    "id": str(conflict.id),
+                    "scheduled_at": conflict.scheduled_at.isoformat(),
+                    "duration_minutes": conflict.duration_minutes,
+                    "appointment_type": conflict.appointment_type.value,
+                    "status": conflict.status.value,
+                    "pet_id": str(conflict.pet_id),
+                    "reason": conflict.reason
+                })
+            
+            return conflict_list
+            
+        except VetClinicException as e:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        except Exception as e:
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Internal server error")

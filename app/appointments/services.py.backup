@@ -1,0 +1,1355 @@
+"""
+Version-agnostic Appointment Service
+
+This service handles data access and core business logic for appointment-related
+operations across all API versions. It supports dynamic parameters to
+accommodate different API version requirements.
+"""
+
+from typing import List, Tuple, Optional, Dict, Any, Union
+from datetime import datetime, date, timedelta
+import uuid
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select, func, and_, or_, delete, String
+from sqlalchemy.orm import selectinload
+
+from app.models.appointment import (
+    Appointment, 
+    AppointmentSlot, 
+    AppointmentStatus, 
+    AppointmentType, 
+    AppointmentPriority
+)
+from app.core.exceptions import VetClinicException, NotFoundError, ValidationError
+
+
+class AppointmentService:
+    """Version-agnostic service for appointment data access and core business logic."""
+
+    def __init__(self, db: AsyncSession):
+        self.db = db
+
+    async def list_appointments(
+        self,
+        page: int = 1,
+        per_page: int = 10,
+        pet_id: Optional[uuid.UUID] = None,
+        pet_owner_id: Optional[uuid.UUID] = None,
+        veterinarian_id: Optional[uuid.UUID] = None,
+        clinic_id: Optional[uuid.UUID] = None,
+        status: Optional[Union[AppointmentStatus, str]] = None,
+        appointment_type: Optional[Union[AppointmentType, str]] = None,
+        priority: Optional[Union[AppointmentPriority, str]] = None,
+        start_date: Optional[date] = None,
+        end_date: Optional[date] = None,
+        upcoming_only: bool = False,
+        today_only: bool = False,
+        include_pet: bool = False,  # V2 parameter
+        include_owner: bool = False,  # V2 parameter
+        include_veterinarian: bool = False,  # V2 parameter
+        include_clinic: bool = False,  # V2 parameter
+        sort_by: Optional[str] = None,  # V2 parameter
+        **kwargs
+    ) -> Tuple[List[Appointment], int]:
+        """
+        List appointments with pagination and filtering.
+        Supports dynamic parameters for different API versions.
+        
+        Args:
+            page: Page number (1-based)
+            per_page: Items per page
+            pet_id: Filter by pet ID
+            pet_owner_id: Filter by pet owner ID
+            veterinarian_id: Filter by veterinarian ID
+            clinic_id: Filter by clinic ID
+            status: Filter by appointment status
+            appointment_type: Filter by appointment type
+            priority: Filter by priority
+            start_date: Filter by start date
+            end_date: Filter by end date
+            upcoming_only: Show only upcoming appointments
+            today_only: Show only today's appointments
+            include_pet: Include pet information (V2)
+            include_owner: Include owner information (V2)
+            include_veterinarian: Include veterinarian information (V2)
+            include_clinic: Include clinic information (V2)
+            sort_by: Sort by field (V2)
+            **kwargs: Additional parameters for future versions
+            
+        Returns:
+            Tuple of (appointments list, total count)
+        """
+        try:
+            # Build base query
+            query = select(Appointment)
+            count_query = select(func.count(Appointment.id))
+            
+            # Apply filters
+            conditions = []
+            
+            if pet_id:
+                conditions.append(Appointment.pet_id == pet_id)
+            
+            if pet_owner_id:
+                conditions.append(Appointment.pet_owner_id == pet_owner_id)
+            
+            if veterinarian_id:
+                conditions.append(Appointment.veterinarian_id == veterinarian_id)
+            
+            if clinic_id:
+                conditions.append(Appointment.clinic_id == clinic_id)
+            
+            if status:
+                if isinstance(status, str):
+                    try:
+                        status = AppointmentStatus(status)
+                    except ValueError:
+                        raise ValidationError(f"Invalid appointment status: {status}")
+                conditions.append(Appointment.status == status)
+            
+            if appointment_type:
+                if isinstance(appointment_type, str):
+                    try:
+                        appointment_type = AppointmentType(appointment_type)
+                    except ValueError:
+                        raise ValidationError(f"Invalid appointment type: {appointment_type}")
+                conditions.append(Appointment.appointment_type == appointment_type)
+            
+            if priority:
+                if isinstance(priority, str):
+                    try:
+                        priority = AppointmentPriority(priority)
+                    except ValueError:
+                        raise ValidationError(f"Invalid priority: {priority}")
+                conditions.append(Appointment.priority == priority)
+            
+            # Date filters
+            if start_date:
+                start_datetime = datetime.combine(start_date, datetime.min.time())
+                conditions.append(Appointment.scheduled_at >= start_datetime)
+            
+            if end_date:
+                end_datetime = datetime.combine(end_date, datetime.max.time())
+                conditions.append(Appointment.scheduled_at <= end_datetime)
+            
+            if upcoming_only:
+                now = datetime.utcnow()
+                conditions.append(Appointment.scheduled_at > now)
+                conditions.append(Appointment.status.in_([
+                    AppointmentStatus.SCHEDULED,
+                    AppointmentStatus.CONFIRMED
+                ]))
+            
+            if today_only:
+                today = datetime.utcnow().date()
+                start_of_day = datetime.combine(today, datetime.min.time())
+                end_of_day = datetime.combine(today, datetime.max.time())
+                conditions.append(Appointment.scheduled_at.between(start_of_day, end_of_day))
+            
+            if conditions:
+                query = query.where(and_(*conditions))
+                count_query = count_query.where(and_(*conditions))
+            
+            # Add relationships if requested (V2)
+            if include_pet:
+                query = query.options(selectinload(Appointment.pet))
+            
+            if include_owner:
+                query = query.options(selectinload(Appointment.pet_owner))
+            
+            if include_veterinarian:
+                query = query.options(selectinload(Appointment.veterinarian))
+            
+            if include_clinic:
+                query = query.options(selectinload(Appointment.clinic))
+            
+            # Get total count
+            total_result = await self.db.execute(count_query)
+            total = total_result.scalar() or 0
+            
+            # Apply sorting (V2 feature)
+            if sort_by:
+                if sort_by == "scheduled_at":
+                    query = query.order_by(Appointment.scheduled_at)
+                elif sort_by == "scheduled_at_desc":
+                    query = query.order_by(Appointment.scheduled_at.desc())
+                elif sort_by == "priority":
+                    # Custom priority ordering
+                    query = query.order_by(Appointment.priority.desc())
+                elif sort_by == "status":
+                    query = query.order_by(Appointment.status)
+                elif sort_by == "created_at":
+                    query = query.order_by(Appointment.created_at.desc())
+                else:
+                    query = query.order_by(Appointment.scheduled_at)
+            else:
+                query = query.order_by(Appointment.scheduled_at)
+            
+            # Apply pagination
+            offset = (page - 1) * per_page
+            query = query.offset(offset).limit(per_page)
+            
+            # Execute query
+            result = await self.db.execute(query)
+            appointments = result.scalars().all()
+            
+            return list(appointments), total
+            
+        except Exception as e:
+            if isinstance(e, VetClinicException):
+                raise
+            raise VetClinicException(f"Failed to list appointments: {str(e)}")
+
+    async def get_appointment_by_id(
+        self,
+        appointment_id: uuid.UUID,
+        include_pet: bool = False,
+        include_owner: bool = False,
+        include_veterinarian: bool = False,
+        include_clinic: bool = False,
+        **kwargs
+    ) -> Appointment:
+        """
+        Get appointment by ID with optional related data.
+        
+        Args:
+            appointment_id: Appointment UUID
+            include_pet: Include pet information (V2)
+            include_owner: Include owner information (V2)
+            include_veterinarian: Include veterinarian information (V2)
+            include_clinic: Include clinic information (V2)
+            **kwargs: Additional parameters for future versions
+            
+        Returns:
+            Appointment object
+            
+        Raises:
+            NotFoundError: If appointment not found
+        """
+        try:
+            query = select(Appointment).where(Appointment.id == appointment_id)
+            
+            # Add optional relationships based on version needs
+            if include_pet:
+                query = query.options(selectinload(Appointment.pet))
+            
+            if include_owner:
+                query = query.options(selectinload(Appointment.pet_owner))
+            
+            if include_veterinarian:
+                query = query.options(selectinload(Appointment.veterinarian))
+            
+            if include_clinic:
+                query = query.options(selectinload(Appointment.clinic))
+            
+            result = await self.db.execute(query)
+            appointment = result.scalar_one_or_none()
+            
+            if not appointment:
+                raise NotFoundError(f"Appointment with id {appointment_id} not found")
+            
+            return appointment
+            
+        except Exception as e:
+            if isinstance(e, VetClinicException):
+                raise
+            raise VetClinicException(f"Failed to get appointment by id: {str(e)}")
+
+    async def create_appointment(
+        self,
+        pet_id: uuid.UUID,
+        pet_owner_id: uuid.UUID,
+        veterinarian_id: uuid.UUID,
+        clinic_id: uuid.UUID,
+        appointment_type: Union[AppointmentType, str],
+        scheduled_at: datetime,
+        reason: str,
+        duration_minutes: int = 30,
+        priority: Union[AppointmentPriority, str] = AppointmentPriority.NORMAL,
+        symptoms: Optional[str] = None,
+        notes: Optional[str] = None,
+        special_instructions: Optional[str] = None,
+        services_requested: Optional[List[str]] = None,
+        estimated_cost: Optional[float] = None,
+        follow_up_required: bool = False,
+        follow_up_date: Optional[datetime] = None,
+        follow_up_notes: Optional[str] = None,
+        **kwargs
+    ) -> Appointment:
+        """
+        Create a new appointment.
+        Supports dynamic parameters for different API versions.
+        
+        Args:
+            pet_id: Pet UUID
+            pet_owner_id: Pet owner UUID
+            veterinarian_id: Veterinarian UUID
+            clinic_id: Clinic UUID
+            appointment_type: Type of appointment
+            scheduled_at: Scheduled date and time
+            reason: Reason for appointment
+            duration_minutes: Duration in minutes
+            priority: Appointment priority
+            symptoms: Pet symptoms
+            notes: Additional notes
+            special_instructions: Special instructions
+            services_requested: List of requested services
+            estimated_cost: Estimated cost
+            follow_up_required: Whether follow-up is required
+            follow_up_date: Follow-up date
+            follow_up_notes: Follow-up notes
+            **kwargs: Additional parameters for future versions
+            
+        Returns:
+            Created appointment object
+            
+        Raises:
+            ValidationError: If validation fails
+        """
+        try:
+            # Handle enum parameters
+            if isinstance(appointment_type, str):
+                try:
+                    appointment_type = AppointmentType(appointment_type)
+                except ValueError:
+                    raise ValidationError(f"Invalid appointment type: {appointment_type}")
+            
+            if isinstance(priority, str):
+                try:
+                    priority = AppointmentPriority(priority)
+                except ValueError:
+                    raise ValidationError(f"Invalid priority: {priority}")
+            
+            # Validate scheduled time is in the future
+            if scheduled_at <= datetime.utcnow():
+                raise ValidationError("Appointment must be scheduled in the future")
+            
+            # Create appointment data
+            appointment_data = {
+                "pet_id": pet_id,
+                "pet_owner_id": pet_owner_id,
+                "veterinarian_id": veterinarian_id,
+                "clinic_id": clinic_id,
+                "appointment_type": appointment_type,
+                "scheduled_at": scheduled_at,
+                "duration_minutes": duration_minutes,
+                "priority": priority,
+                "reason": reason.strip(),
+                "symptoms": symptoms.strip() if symptoms else None,
+                "notes": notes.strip() if notes else None,
+                "special_instructions": special_instructions.strip() if special_instructions else None,
+                "services_requested": services_requested,
+                "estimated_cost": estimated_cost,
+                "follow_up_required": follow_up_required,
+                "follow_up_date": follow_up_date,
+                "follow_up_notes": follow_up_notes.strip() if follow_up_notes else None,
+                "status": AppointmentStatus.SCHEDULED
+            }
+            
+            # Create new appointment
+            new_appointment = Appointment(**appointment_data)
+            
+            self.db.add(new_appointment)
+            await self.db.commit()
+            await self.db.refresh(new_appointment)
+            
+            return new_appointment
+            
+        except Exception as e:
+            await self.db.rollback()
+            if isinstance(e, VetClinicException):
+                raise
+            raise VetClinicException(f"Failed to create appointment: {str(e)}")
+
+    async def update_appointment(
+        self,
+        appointment_id: uuid.UUID,
+        scheduled_at: Optional[datetime] = None,
+        appointment_type: Optional[Union[AppointmentType, str]] = None,
+        priority: Optional[Union[AppointmentPriority, str]] = None,
+        reason: Optional[str] = None,
+        symptoms: Optional[str] = None,
+        notes: Optional[str] = None,
+        special_instructions: Optional[str] = None,
+        services_requested: Optional[List[str]] = None,
+        estimated_cost: Optional[float] = None,
+        actual_cost: Optional[float] = None,
+        follow_up_required: Optional[bool] = None,
+        follow_up_date: Optional[datetime] = None,
+        follow_up_notes: Optional[str] = None,
+        duration_minutes: Optional[int] = None,
+        **kwargs
+    ) -> Appointment:
+        """
+        Update appointment information.
+        Supports dynamic parameters for different API versions.
+        
+        Returns:
+            Updated appointment object
+        """
+        try:
+            appointment = await self.get_appointment_by_id(appointment_id)
+            
+            # Update fields if provided
+            if scheduled_at is not None:
+                if scheduled_at <= datetime.utcnow():
+                    raise ValidationError("Appointment must be scheduled in the future")
+                appointment.scheduled_at = scheduled_at
+            
+            if appointment_type is not None:
+                if isinstance(appointment_type, str):
+                    try:
+                        appointment_type = AppointmentType(appointment_type)
+                    except ValueError:
+                        raise ValidationError(f"Invalid appointment type: {appointment_type}")
+                appointment.appointment_type = appointment_type
+            
+            if priority is not None:
+                if isinstance(priority, str):
+                    try:
+                        priority = AppointmentPriority(priority)
+                    except ValueError:
+                        raise ValidationError(f"Invalid priority: {priority}")
+                appointment.priority = priority
+            
+            if reason is not None:
+                appointment.reason = reason.strip()
+            if symptoms is not None:
+                appointment.symptoms = symptoms.strip() if symptoms else None
+            if notes is not None:
+                appointment.notes = notes.strip() if notes else None
+            if special_instructions is not None:
+                appointment.special_instructions = special_instructions.strip() if special_instructions else None
+            if services_requested is not None:
+                appointment.services_requested = services_requested
+            if estimated_cost is not None:
+                appointment.estimated_cost = estimated_cost
+            if actual_cost is not None:
+                appointment.actual_cost = actual_cost
+            if follow_up_required is not None:
+                appointment.follow_up_required = follow_up_required
+            if follow_up_date is not None:
+                appointment.follow_up_date = follow_up_date
+            if follow_up_notes is not None:
+                appointment.follow_up_notes = follow_up_notes.strip() if follow_up_notes else None
+            if duration_minutes is not None:
+                appointment.duration_minutes = duration_minutes
+            
+            await self.db.commit()
+            await self.db.refresh(appointment)
+            
+            return appointment
+            
+        except Exception as e:
+            await self.db.rollback()
+            if isinstance(e, VetClinicException):
+                raise
+            raise VetClinicException(f"Failed to update appointment: {str(e)}")
+
+    async def cancel_appointment(
+        self,
+        appointment_id: uuid.UUID,
+        cancellation_reason: Optional[str] = None
+    ) -> Appointment:
+        """
+        Cancel an appointment.
+        
+        Args:
+            appointment_id: Appointment UUID
+            cancellation_reason: Reason for cancellation
+            
+        Returns:
+            Updated appointment object
+        """
+        try:
+            appointment = await self.get_appointment_by_id(appointment_id)
+            
+            if not hasattr(appointment, "can_be_cancelled") or not appointment.can_be_cancelled:
+                raise ValidationError(f"Appointment with status {appointment.status} cannot be cancelled")
+            
+            appointment.cancel(cancellation_reason)
+            
+            await self.db.commit()
+            await self.db.refresh(appointment)
+            
+            return appointment
+            
+        except Exception as e:
+            await self.db.rollback()
+            if isinstance(e, VetClinicException):
+                raise
+            raise VetClinicException(f"Failed to cancel appointment: {str(e)}")
+
+    async def confirm_appointment(self, appointment_id: uuid.UUID) -> Appointment:
+        """
+        Confirm an appointment.
+        
+        Args:
+            appointment_id: Appointment UUID
+            
+        Returns:
+            Updated appointment object
+        """
+        try:
+            appointment = await self.get_appointment_by_id(appointment_id)
+            
+            if appointment.status != AppointmentStatus.SCHEDULED:
+                raise ValidationError(f"Only scheduled appointments can be confirmed")
+            
+            appointment.confirm()
+            
+            await self.db.commit()
+            await self.db.refresh(appointment)
+            
+            return appointment
+            
+        except Exception as e:
+            await self.db.rollback()
+            if isinstance(e, VetClinicException):
+                raise
+            raise VetClinicException(f"Failed to confirm appointment: {str(e)}")
+
+    async def start_appointment(self, appointment_id: uuid.UUID) -> Appointment:
+        """
+        Start an appointment.
+        
+        Args:
+            appointment_id: Appointment UUID
+            
+        Returns:
+            Updated appointment object
+        """
+        try:
+            appointment = await self.get_appointment_by_id(appointment_id)
+            
+            if appointment.status not in [AppointmentStatus.SCHEDULED, AppointmentStatus.CONFIRMED]:
+                raise ValidationError(f"Appointment with status {appointment.status} cannot be started")
+            
+            appointment.start()
+            
+            await self.db.commit()
+            await self.db.refresh(appointment)
+            
+            return appointment
+            
+        except Exception as e:
+            await self.db.rollback()
+            if isinstance(e, VetClinicException):
+                raise
+            raise VetClinicException(f"Failed to start appointment: {str(e)}")
+
+    async def complete_appointment(
+        self,
+        appointment_id: uuid.UUID,
+        actual_cost: Optional[float] = None
+    ) -> Appointment:
+        """
+        Complete an appointment.
+        
+        Args:
+            appointment_id: Appointment UUID
+            actual_cost: Actual cost of the appointment
+            
+        Returns:
+            Updated appointment object
+        """
+        try:
+            appointment = await self.get_appointment_by_id(appointment_id)
+            
+            if appointment.status != AppointmentStatus.IN_PROGRESS:
+                raise ValidationError(f"Only in-progress appointments can be completed")
+            
+            appointment.complete(actual_cost)
+            
+            await self.db.commit()
+            await self.db.refresh(appointment)
+            
+            return appointment
+            
+        except Exception as e:
+            await self.db.rollback()
+            if isinstance(e, VetClinicException):
+                raise
+            raise VetClinicException(f"Failed to complete appointment: {str(e)}")
+
+    async def reschedule_appointment(
+        self,
+        appointment_id: uuid.UUID,
+        new_scheduled_at: datetime
+    ) -> Appointment:
+        """
+        Reschedule an appointment.
+        
+        Args:
+            appointment_id: Appointment UUID
+            new_scheduled_at: New scheduled date and time
+            
+        Returns:
+            Updated appointment object
+        """
+        try:
+            appointment = await self.get_appointment_by_id(appointment_id)
+            
+            if not appointment.can_be_rescheduled:
+                raise ValidationError(f"Appointment with status {appointment.status} cannot be rescheduled")
+            
+            if new_scheduled_at <= datetime.utcnow():
+                raise ValidationError("New appointment time must be in the future")
+            
+            # Update the scheduled time and status
+            appointment.scheduled_at = new_scheduled_at
+            appointment.status = AppointmentStatus.SCHEDULED  # Reset to scheduled
+            appointment.confirmed_at = None  # Clear confirmation
+            
+            await self.db.commit()
+            await self.db.refresh(appointment)
+            
+            return appointment
+            
+        except Exception as e:
+            await self.db.rollback()
+            if isinstance(e, VetClinicException):
+                raise
+            raise VetClinicException(f"Failed to reschedule appointment: {str(e)}")
+
+    async def delete_appointment(self, appointment_id: uuid.UUID) -> None:
+        """
+        Hard delete an appointment.
+        
+        Args:
+            appointment_id: Appointment UUID
+        """
+        try:
+            appointment = await self.get_appointment_by_id(appointment_id)
+            
+            await self.db.delete(appointment)
+            await self.db.commit()
+            
+        except Exception as e:
+            await self.db.rollback()
+            if isinstance(e, VetClinicException):
+                raise
+            raise VetClinicException(f"Failed to delete appointment: {str(e)}")
+
+    async def get_appointments_by_pet(
+        self,
+        pet_id: uuid.UUID,
+        include_past: bool = True,
+        limit: Optional[int] = None,
+        **kwargs
+    ) -> List[Appointment]:
+        """
+        Get all appointments for a specific pet.
+        
+        Args:
+            pet_id: Pet UUID
+            include_past: Include past appointments
+            limit: Limit number of results
+            **kwargs: Additional parameters for future versions
+            
+        Returns:
+            List of appointments
+        """
+        try:
+            query = select(Appointment).where(Appointment.pet_id == pet_id)
+            
+            if not include_past:
+                now = datetime.utcnow()
+                query = query.where(Appointment.scheduled_at > now)
+            
+            query = query.order_by(Appointment.scheduled_at.desc())
+            
+            if limit:
+                query = query.limit(limit)
+            
+            result = await self.db.execute(query)
+            appointments = result.scalars().all()
+            
+            return list(appointments)
+            
+        except Exception as e:
+            raise VetClinicException(f"Failed to get appointments by pet: {str(e)}")
+
+    async def get_appointments_by_veterinarian(
+        self,
+        veterinarian_id: uuid.UUID,
+        start_date: Optional[date] = None,
+        end_date: Optional[date] = None,
+        **kwargs
+    ) -> List[Appointment]:
+        """
+        Get all appointments for a specific veterinarian.
+        
+        Args:
+            veterinarian_id: Veterinarian UUID
+            start_date: Filter by start date
+            end_date: Filter by end date
+            **kwargs: Additional parameters for future versions
+            
+        Returns:
+            List of appointments
+        """
+        try:
+            query = select(Appointment).where(Appointment.veterinarian_id == veterinarian_id)
+            
+            if start_date:
+                start_datetime = datetime.combine(start_date, datetime.min.time())
+                query = query.where(Appointment.scheduled_at >= start_datetime)
+            
+            if end_date:
+                end_datetime = datetime.combine(end_date, datetime.max.time())
+                query = query.where(Appointment.scheduled_at <= end_datetime)
+            
+            query = query.order_by(Appointment.scheduled_at)
+            
+            result = await self.db.execute(query)
+            appointments = result.scalars().all()
+            
+            return list(appointments)
+            
+        except Exception as e:
+            raise VetClinicException(f"Failed to get appointments by veterinarian: {str(e)}")
+
+    async def get_available_slots(
+        self,
+        veterinarian_id: uuid.UUID,
+        clinic_id: uuid.UUID,
+        start_date: date,
+        end_date: Optional[date] = None,
+        duration_minutes: int = 30,
+        **kwargs
+    ) -> List[AppointmentSlot]:
+        """
+        Get available appointment slots.
+        
+        Args:
+            veterinarian_id: Veterinarian UUID
+            clinic_id: Clinic UUID
+            start_date: Start date for slot search
+            end_date: End date for slot search
+            duration_minutes: Required appointment duration
+            **kwargs: Additional parameters for future versions
+            
+        Returns:
+            List of available appointment slots
+        """
+        try:
+            if end_date is None:
+                end_date = start_date + timedelta(days=7)  # Default to one week
+            
+            start_datetime = datetime.combine(start_date, datetime.min.time())
+            end_datetime = datetime.combine(end_date, datetime.max.time())
+            
+            query = select(AppointmentSlot).where(
+                and_(
+                    AppointmentSlot.veterinarian_id == veterinarian_id,
+                    AppointmentSlot.clinic_id == clinic_id,
+                    AppointmentSlot.start_time >= start_datetime,
+                    AppointmentSlot.start_time <= end_datetime,
+                    AppointmentSlot.is_available == True,
+                    AppointmentSlot.is_blocked == False,
+                    AppointmentSlot.duration_minutes >= duration_minutes
+                )
+            ).order_by(AppointmentSlot.start_time)
+            
+            result = await self.db.execute(query)
+            slots = result.scalars().all()
+            
+            # Filter out fully booked slots
+            available_slots = [slot for slot in slots if not slot.is_fully_booked]
+            
+            return available_slots
+            
+        except Exception as e:
+            raise VetClinicException(f"Failed to get available slots: {str(e)}")
+
+    async def get_calendar_view(
+        self,
+        veterinarian_id: Optional[uuid.UUID] = None,
+        clinic_id: Optional[uuid.UUID] = None,
+        start_date: date = None,
+        end_date: Optional[date] = None,
+        view_type: str = "week",
+        **kwargs
+    ) -> Dict[str, Any]:
+        """
+        Get calendar view of appointments and availability.
+        
+        Args:
+            veterinarian_id: Filter by veterinarian ID
+            clinic_id: Filter by clinic ID
+            start_date: Calendar start date
+            end_date: Calendar end date
+            view_type: Calendar view type (day, week, month)
+            **kwargs: Additional parameters for future versions
+            
+        Returns:
+            Dictionary containing calendar data with appointments and availability
+        """
+        try:
+            if start_date is None:
+                start_date = datetime.utcnow().date()
+            
+            # Calculate end date based on view type
+            if end_date is None:
+                if view_type == "day":
+                    end_date = start_date
+                elif view_type == "week":
+                    end_date = start_date + timedelta(days=6)
+                elif view_type == "month":
+                    # Get last day of the month
+                    if start_date.month == 12:
+                        end_date = date(start_date.year + 1, 1, 1) - timedelta(days=1)
+                    else:
+                        end_date = date(start_date.year, start_date.month + 1, 1) - timedelta(days=1)
+                else:
+                    end_date = start_date + timedelta(days=6)  # Default to week
+            
+            start_datetime = datetime.combine(start_date, datetime.min.time())
+            end_datetime = datetime.combine(end_date, datetime.max.time())
+            
+            # Build appointment query
+            appointment_query = select(Appointment).where(
+                and_(
+                    Appointment.scheduled_at >= start_datetime,
+                    Appointment.scheduled_at <= end_datetime
+                )
+            ).options(
+                selectinload(Appointment.pet),
+                selectinload(Appointment.pet_owner),
+                selectinload(Appointment.veterinarian),
+                selectinload(Appointment.clinic)
+            )
+            
+            # Apply filters
+            if veterinarian_id:
+                appointment_query = appointment_query.where(Appointment.veterinarian_id == veterinarian_id)
+            if clinic_id:
+                appointment_query = appointment_query.where(Appointment.clinic_id == clinic_id)
+            
+            appointment_query = appointment_query.order_by(Appointment.scheduled_at)
+            
+            # Get appointments
+            appointment_result = await self.db.execute(appointment_query)
+            appointments = appointment_result.scalars().all()
+            
+            # Build availability query
+            slot_query = select(AppointmentSlot).where(
+                and_(
+                    AppointmentSlot.start_time >= start_datetime,
+                    AppointmentSlot.start_time <= end_datetime,
+                    AppointmentSlot.is_available == True,
+                    AppointmentSlot.is_blocked == False
+                )
+            )
+            
+            if veterinarian_id:
+                slot_query = slot_query.where(AppointmentSlot.veterinarian_id == veterinarian_id)
+            if clinic_id:
+                slot_query = slot_query.where(AppointmentSlot.clinic_id == clinic_id)
+            
+            slot_query = slot_query.order_by(AppointmentSlot.start_time)
+            
+            # Get available slots
+            slot_result = await self.db.execute(slot_query)
+            slots = slot_result.scalars().all()
+            
+            # Format appointments for calendar
+            calendar_appointments = []
+            for appointment in appointments:
+                calendar_appointments.append({
+                    "id": str(appointment.id),
+                    "title": f"{appointment.pet.name if appointment.pet else 'Unknown Pet'} - {appointment.reason}",
+                    "start_time": appointment.scheduled_at.isoformat(),
+                    "end_time": (appointment.scheduled_at + timedelta(minutes=appointment.duration_minutes)).isoformat(),
+                    "duration_minutes": appointment.duration_minutes,
+                    "status": appointment.status.value,
+                    "appointment_type": appointment.appointment_type.value,
+                    "priority": appointment.priority.value,
+                    "pet_id": str(appointment.pet_id),
+                    "pet_name": appointment.pet.name if appointment.pet else None,
+                    "pet_owner_id": str(appointment.pet_owner_id),
+                    "pet_owner_name": f"{appointment.pet_owner.first_name} {appointment.pet_owner.last_name}" if appointment.pet_owner else None,
+                    "veterinarian_id": str(appointment.veterinarian_id),
+                    "veterinarian_name": f"Dr. {appointment.veterinarian.user.first_name} {appointment.veterinarian.user.last_name}" if appointment.veterinarian and appointment.veterinarian.user else None,
+                    "clinic_id": str(appointment.clinic_id),
+                    "clinic_name": appointment.clinic.name if appointment.clinic else None,
+                    "estimated_cost": appointment.estimated_cost,
+                    "actual_cost": appointment.actual_cost,
+                    "can_be_cancelled": appointment.can_be_cancelled,
+                    "can_be_rescheduled": appointment.can_be_rescheduled
+                })
+            
+            # Format available slots for calendar
+            available_slots = []
+            for slot in slots:
+                if not slot.is_fully_booked:
+                    available_slots.append({
+                        "id": str(slot.id),
+                        "start_time": slot.start_time.isoformat(),
+                        "end_time": slot.end_time.isoformat(),
+                        "duration_minutes": slot.duration_minutes,
+                        "slot_type": slot.slot_type,
+                        "remaining_capacity": slot.remaining_capacity,
+                        "veterinarian_id": str(slot.veterinarian_id),
+                        "clinic_id": str(slot.clinic_id),
+                        "is_available": True
+                    })
+            
+            # Calculate summary statistics
+            total_appointments = len(appointments)
+            appointments_by_status = {}
+            for appointment in appointments:
+                status = appointment.status.value
+                appointments_by_status[status] = appointments_by_status.get(status, 0) + 1
+            
+            # Calculate utilization rate
+            total_slots = len(slots)
+            booked_slots = len([slot for slot in slots if slot.current_bookings > 0])
+            utilization_rate = (booked_slots / total_slots * 100) if total_slots > 0 else 0
+            
+            return {
+                "view_type": view_type,
+                "start_date": start_date.isoformat(),
+                "end_date": end_date.isoformat(),
+                "appointments": calendar_appointments,
+                "available_slots": available_slots,
+                "summary": {
+                    "total_appointments": total_appointments,
+                    "appointments_by_status": appointments_by_status,
+                    "total_available_slots": len(available_slots),
+                    "utilization_rate": round(utilization_rate, 2)
+                },
+                "filters": {
+                    "veterinarian_id": str(veterinarian_id) if veterinarian_id else None,
+                    "clinic_id": str(clinic_id) if clinic_id else None
+                }
+            }
+            
+        except Exception as e:
+            raise VetClinicException(f"Failed to get calendar view: {str(e)}")
+
+    async def check_appointment_conflicts(
+        self,
+        veterinarian_id: uuid.UUID,
+        scheduled_at: datetime,
+        duration_minutes: int = 30,
+        exclude_appointment_id: Optional[uuid.UUID] = None,
+        **kwargs
+    ) -> List[Appointment]:
+        """
+        Check for appointment conflicts before booking or rescheduling.
+        
+        Args:
+            veterinarian_id: Veterinarian UUID
+            scheduled_at: Proposed appointment time
+            duration_minutes: Duration of the appointment
+            exclude_appointment_id: Appointment ID to exclude from conflict check (for rescheduling)
+            **kwargs: Additional parameters for future versions
+            
+        Returns:
+            List of conflicting appointments
+        """
+        try:
+            # Calculate time window for conflict checking
+            appointment_start = scheduled_at
+            appointment_end = scheduled_at + timedelta(minutes=duration_minutes)
+            
+            # Build conflict query - simplified approach
+            # An appointment conflicts if it overlaps with the proposed time
+            query = select(Appointment).where(
+                and_(
+                    Appointment.veterinarian_id == veterinarian_id,
+                    Appointment.status.in_([
+                        AppointmentStatus.SCHEDULED,
+                        AppointmentStatus.CONFIRMED,
+                        AppointmentStatus.IN_PROGRESS
+                    ]),
+                    # Check for time overlap: appointment starts before our end time
+                    # and ends after our start time
+                    Appointment.scheduled_at < appointment_end,
+                    func.datetime(
+                        Appointment.scheduled_at, 
+                        '+' + func.cast(Appointment.duration_minutes, String) + ' minutes'
+                    ) > scheduled_at
+                )
+            ).options(
+                selectinload(Appointment.pet),
+                selectinload(Appointment.pet_owner)
+            )
+            
+            # Exclude specific appointment if provided (for rescheduling)
+            if exclude_appointment_id:
+                query = query.where(Appointment.id != exclude_appointment_id)
+            
+            result = await self.db.execute(query)
+            conflicts = result.scalars().all()
+            
+            return list(conflicts)
+            
+        except Exception as e:
+            raise VetClinicException(f"Failed to check appointment conflicts: {str(e)}")
+
+    async def get_appointment_statistics(
+        self,
+        veterinarian_id: Optional[uuid.UUID] = None,
+        clinic_id: Optional[uuid.UUID] = None,
+        start_date: Optional[date] = None,
+        end_date: Optional[date] = None,
+        **kwargs
+    ) -> Dict[str, Any]:
+        """
+        Get appointment statistics for reporting and analytics.
+        
+        Args:
+            veterinarian_id: Filter by veterinarian ID
+            clinic_id: Filter by clinic ID
+            start_date: Start date for statistics
+            end_date: End date for statistics
+            **kwargs: Additional parameters for future versions
+            
+        Returns:
+            Dictionary containing appointment statistics
+        """
+        try:
+            # Default to current month if no dates provided
+            if start_date is None:
+                today = datetime.utcnow().date()
+                start_date = date(today.year, today.month, 1)
+            
+            if end_date is None:
+                # Get last day of the month
+                if start_date.month == 12:
+                    end_date = date(start_date.year + 1, 1, 1) - timedelta(days=1)
+                else:
+                    end_date = date(start_date.year, start_date.month + 1, 1) - timedelta(days=1)
+            
+            start_datetime = datetime.combine(start_date, datetime.min.time())
+            end_datetime = datetime.combine(end_date, datetime.max.time())
+            
+            # Build base query
+            query = select(Appointment).where(
+                and_(
+                    Appointment.scheduled_at >= start_datetime,
+                    Appointment.scheduled_at <= end_datetime
+                )
+            )
+            
+            # Apply filters
+            if veterinarian_id:
+                query = query.where(Appointment.veterinarian_id == veterinarian_id)
+            if clinic_id:
+                query = query.where(Appointment.clinic_id == clinic_id)
+            
+            result = await self.db.execute(query)
+            appointments = result.scalars().all()
+            
+            # Calculate statistics
+            total_appointments = len(appointments)
+            
+            # Count by status
+            status_counts = {}
+            for status in AppointmentStatus:
+                status_counts[status.value] = 0
+            
+            for appointment in appointments:
+                status_counts[appointment.status.value] += 1
+            
+            # Count by type
+            type_counts = {}
+            for appointment_type in AppointmentType:
+                type_counts[appointment_type.value] = 0
+            
+            for appointment in appointments:
+                type_counts[appointment.appointment_type.value] += 1
+            
+            # Count by priority
+            priority_counts = {}
+            for priority in AppointmentPriority:
+                priority_counts[priority.value] = 0
+            
+            for appointment in appointments:
+                priority_counts[appointment.priority.value] += 1
+            
+            # Calculate revenue statistics
+            total_estimated_revenue = sum(
+                appointment.estimated_cost or 0 
+                for appointment in appointments 
+                if appointment.estimated_cost
+            )
+            
+            total_actual_revenue = sum(
+                appointment.actual_cost or 0 
+                for appointment in appointments 
+                if appointment.actual_cost and appointment.status == AppointmentStatus.COMPLETED
+            )
+            
+            completed_appointments = [
+                appointment for appointment in appointments 
+                if appointment.status == AppointmentStatus.COMPLETED
+            ]
+            
+            average_appointment_cost = (
+                total_actual_revenue / len(completed_appointments) 
+                if completed_appointments else 0
+            )
+            
+            # Calculate completion rate
+            scheduled_or_confirmed = len([
+                appointment for appointment in appointments 
+                if appointment.status in [AppointmentStatus.SCHEDULED, AppointmentStatus.CONFIRMED, AppointmentStatus.COMPLETED]
+            ])
+            
+            completion_rate = (
+                status_counts[AppointmentStatus.COMPLETED.value] / scheduled_or_confirmed * 100
+                if scheduled_or_confirmed > 0 else 0
+            )
+            
+            # Calculate no-show rate
+            no_show_rate = (
+                status_counts[AppointmentStatus.NO_SHOW.value] / total_appointments * 100
+                if total_appointments > 0 else 0
+            )
+            
+            # Calculate cancellation rate
+            cancellation_rate = (
+                status_counts[AppointmentStatus.CANCELLED.value] / total_appointments * 100
+                if total_appointments > 0 else 0
+            )
+            
+            return {
+                "period": {
+                    "start_date": start_date.isoformat(),
+                    "end_date": end_date.isoformat()
+                },
+                "filters": {
+                    "veterinarian_id": str(veterinarian_id) if veterinarian_id else None,
+                    "clinic_id": str(clinic_id) if clinic_id else None
+                },
+                "totals": {
+                    "total_appointments": total_appointments,
+                    "completed_appointments": len(completed_appointments),
+                    "total_estimated_revenue": round(total_estimated_revenue, 2),
+                    "total_actual_revenue": round(total_actual_revenue, 2),
+                    "average_appointment_cost": round(average_appointment_cost, 2)
+                },
+                "counts_by_status": status_counts,
+                "counts_by_type": type_counts,
+                "counts_by_priority": priority_counts,
+                "rates": {
+                    "completion_rate": round(completion_rate, 2),
+                    "no_show_rate": round(no_show_rate, 2),
+                    "cancellation_rate": round(cancellation_rate, 2)
+                }
+            }
+            
+        except Exception as e:
+            raise VetClinicException(f"Failed to get appointment statistics: {str(e)}")
+
+    async def create_appointment_slots(
+        self,
+        veterinarian_id: uuid.UUID,
+        clinic_id: uuid.UUID,
+        start_date: date,
+        end_date: date,
+        start_time: str = "09:00",
+        end_time: str = "17:00",
+        slot_duration: int = 30,
+        break_duration: int = 0,
+        exclude_weekends: bool = True,
+        **kwargs
+    ) -> List[AppointmentSlot]:
+        """
+        Create appointment slots for a veterinarian at a clinic.
+        
+        Args:
+            veterinarian_id: Veterinarian UUID
+            clinic_id: Clinic UUID
+            start_date: Start date for slot creation
+            end_date: End date for slot creation
+            start_time: Daily start time (HH:MM format)
+            end_time: Daily end time (HH:MM format)
+            slot_duration: Duration of each slot in minutes
+            break_duration: Break between slots in minutes
+            exclude_weekends: Whether to exclude weekends
+            **kwargs: Additional parameters for future versions
+            
+        Returns:
+            List of created appointment slots
+        """
+        try:
+            created_slots = []
+            current_date = start_date
+            
+            # Parse start and end times
+            start_hour, start_minute = map(int, start_time.split(':'))
+            end_hour, end_minute = map(int, end_time.split(':'))
+            
+            while current_date <= end_date:
+                # Skip weekends if requested
+                if exclude_weekends and current_date.weekday() >= 5:  # Saturday = 5, Sunday = 6
+                    current_date += timedelta(days=1)
+                    continue
+                
+                # Create slots for the current day
+                current_time = datetime.combine(current_date, datetime.min.time()).replace(
+                    hour=start_hour, minute=start_minute
+                )
+                day_end_time = datetime.combine(current_date, datetime.min.time()).replace(
+                    hour=end_hour, minute=end_minute
+                )
+                
+                while current_time + timedelta(minutes=slot_duration) <= day_end_time:
+                    slot_end_time = current_time + timedelta(minutes=slot_duration)
+                    
+                    # Check if slot already exists
+                    existing_slot_query = select(AppointmentSlot).where(
+                        and_(
+                            AppointmentSlot.veterinarian_id == veterinarian_id,
+                            AppointmentSlot.clinic_id == clinic_id,
+                            AppointmentSlot.start_time == current_time
+                        )
+                    )
+                    
+                    existing_result = await self.db.execute(existing_slot_query)
+                    existing_slot = existing_result.scalar_one_or_none()
+                    
+                    if not existing_slot:
+                        # Create new slot
+                        new_slot = AppointmentSlot(
+                            veterinarian_id=veterinarian_id,
+                            clinic_id=clinic_id,
+                            start_time=current_time,
+                            end_time=slot_end_time,
+                            duration_minutes=slot_duration,
+                            is_available=True,
+                            is_blocked=False,
+                            slot_type="regular",
+                            max_bookings=1,
+                            current_bookings=0
+                        )
+                        
+                        self.db.add(new_slot)
+                        created_slots.append(new_slot)
+                    
+                    # Move to next slot
+                    current_time = slot_end_time + timedelta(minutes=break_duration)
+                
+                current_date += timedelta(days=1)
+            
+            await self.db.commit()
+            
+            # Refresh all created slots
+            for slot in created_slots:
+                await self.db.refresh(slot)
+            
+            return created_slots
+            
+        except Exception as e:
+            await self.db.rollback()
+            raise VetClinicException(f"Failed to create appointment slots: {str(e)}")
+            view_type: Calendar view type (day, week, month)
+            **kwargs: Additional parameters for future versions
+            
+        Returns:
+            Dictionary containing calendar data
+        """
+        try:
+            # Set default end date based on view type
+            if end_date is None:
+                if view_type == "day":
+                    end_date = start_date
+                elif view_type == "week":
+                    end_date = start_date + timedelta(days=6)
+                elif view_type == "month":
+                    # Get last day of the month
+                    if start_date.month == 12:
+                        end_date = date(start_date.year + 1, 1, 1) - timedelta(days=1)
+                    else:
+                        end_date = date(start_date.year, start_date.month + 1, 1) - timedelta(days=1)
+                else:
+                    end_date = start_date + timedelta(days=6)  # Default to week
+            
+            start_datetime = datetime.combine(start_date, datetime.min.time())
+            end_datetime = datetime.combine(end_date, datetime.max.time())
+            
+            # Get appointments for the date range
+            appointments_query = select(Appointment).where(
+                and_(
+                    Appointment.scheduled_at >= start_datetime,
+                    Appointment.scheduled_at <= end_datetime
+                )
+            )
+            
+            if veterinarian_id:
+                appointments_query = appointments_query.where(Appointment.veterinarian_id == veterinarian_id)
+            
+            if clinic_id:
+                appointments_query = appointments_query.where(Appointment.clinic_id == clinic_id)
+            
+            appointments_query = appointments_query.order_by(Appointment.scheduled_at)
+            
+            appointments_result = await self.db.execute(appointments_query)
+            appointments = appointments_result.scalars().all()
+            
+            # Get available slots for the date range
+            slots_query = select(AppointmentSlot).where(
+                and_(
+                    AppointmentSlot.start_time >= start_datetime,
+                    AppointmentSlot.start_time <= end_datetime,
+                    AppointmentSlot.is_available == True,
+                    AppointmentSlot.is_blocked == False
+                )
+            )
+            
+            if veterinarian_id:
+                slots_query = slots_query.where(AppointmentSlot.veterinarian_id == veterinarian_id)
+            
+            if clinic_id:
+                slots_query = slots_query.where(AppointmentSlot.clinic_id == clinic_id)
+            
+            slots_query = slots_query.order_by(AppointmentSlot.start_time)
+            
+            slots_result = await self.db.execute(slots_query)
+            slots = slots_result.scalars().all()
+            
+            # Format calendar data
+            calendar_data = {
+                "view_type": view_type,
+                "start_date": start_date.isoformat(),
+                "end_date": end_date.isoformat(),
+                "appointments": [
+                    {
+                        "id": str(appointment.id),
+                        "pet_id": str(appointment.pet_id),
+                        "veterinarian_id": str(appointment.veterinarian_id),
+                        "clinic_id": str(appointment.clinic_id),
+                        "scheduled_at": appointment.scheduled_at.isoformat(),
+                        "duration_minutes": appointment.duration_minutes,
+                        "appointment_type": appointment.appointment_type.value,
+                        "status": appointment.status.value,
+                        "priority": appointment.priority.value,
+                        "reason": appointment.reason
+                    }
+                    for appointment in appointments
+                ],
+                "available_slots": [
+                    {
+                        "id": str(slot.id),
+                        "veterinarian_id": str(slot.veterinarian_id),
+                        "clinic_id": str(slot.clinic_id),
+                        "start_time": slot.start_time.isoformat(),
+                        "end_time": slot.end_time.isoformat(),
+                        "duration_minutes": slot.duration_minutes,
+                        "slot_type": slot.slot_type,
+                        "remaining_capacity": slot.remaining_capacity,
+                        "is_available": not slot.is_fully_booked
+                    }
+                    for slot in slots if not slot.is_fully_booked
+                ]
+            }
+            
+            return calendar_data
+            
+        except Exception as e:
+            raise VetClinicException(f"Failed to get calendar view: {str(e)}")

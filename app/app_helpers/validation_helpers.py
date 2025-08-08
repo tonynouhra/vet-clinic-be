@@ -108,7 +108,11 @@ def validate_email(email: str, field_name: str = "email") -> str:
     
     try:
         # Use email-validator library for comprehensive validation
-        valid_email = email_validate(email)
+        # In test environment, skip deliverability check
+        import os
+        check_deliverability = os.getenv("ENVIRONMENT", "development") != "test"
+        
+        valid_email = email_validate(email, check_deliverability=check_deliverability)
         return valid_email.email.lower()  # Normalize to lowercase
     except EmailNotValidError as e:
         raise ValidationError(

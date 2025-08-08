@@ -507,6 +507,15 @@ def positive_float_field(description: str, default: Any = ...) -> Field:
     )
 
 
+def password_field(description: str, min_length: int = 8) -> Field:
+    """Create a password field with validation."""
+    return Field(
+        description=description,
+        min_length=min_length,
+        max_length=128
+    )
+
+
 # Schema validation mixin
 class SchemaValidationMixin:
     """Mixin for additional schema validation methods."""

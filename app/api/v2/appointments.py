@@ -37,7 +37,7 @@ from app.api.schemas.v2.appointments import (
     ClinicInfoV2
 )
 
-router = APIRouter(prefix="/appointments", tags=["appointments-v2"])
+router = APIRouter(tags=["appointments-v2"])
 
 
 # Helper function to convert Appointment model to V2 response

@@ -34,30 +34,15 @@ class StructuredFormatter(logging.Formatter):
         }
         
         # Add extra fields if present
-        if hasattr(record, 'user_id'):
-            log_entry['user_id'] = record.user_id
-        if hasattr(record, 'clerk_id'):
-            log_entry['clerk_id'] = record.clerk_id
-        if hasattr(record, 'request_id'):
-            log_entry['request_id'] = record.request_id
-        if hasattr(record, 'event_type'):
-            log_entry['event_type'] = record.event_type
-        if hasattr(record, 'ip_address'):
-            log_entry['ip_address'] = record.ip_address
-        if hasattr(record, 'user_agent'):
-            log_entry['user_agent'] = record.user_agent
-        if hasattr(record, 'endpoint'):
-            log_entry['endpoint'] = record.endpoint
-        if hasattr(record, 'method'):
-            log_entry['method'] = record.method
-        if hasattr(record, 'status_code'):
-            log_entry['status_code'] = record.status_code
-        if hasattr(record, 'response_time'):
-            log_entry['response_time'] = record.response_time
-        if hasattr(record, 'error_code'):
-            log_entry['error_code'] = record.error_code
-        if hasattr(record, 'security_event'):
-            log_entry['security_event'] = record.security_event
+        extra_fields = [
+            'user_id', 'clerk_id', 'request_id', 'event_type', 'ip_address', 
+            'user_agent', 'endpoint', 'method', 'status_code', 'response_time', 
+            'error_code', 'security_event', 'operation'
+        ]
+        
+        for field in extra_fields:
+            if hasattr(record, field):
+                log_entry[field] = getattr(record, field)
         
         # Add exception information if present
         if record.exc_info:
